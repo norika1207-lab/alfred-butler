@@ -412,8 +412,7 @@ async function sendMsg(msg){
     try {
       const r2=await fetch(API+'/chat',{
         method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({message:msg,history:[]}),  // 清 history 重試
-        signal: AbortSignal.timeout(20000)
+        body:JSON.stringify({message:msg,history:[]})
       });
       const d2=await r2.json();
       setState(''); typeWrite(d2.text); speak(d2.text);
