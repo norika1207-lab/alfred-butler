@@ -554,11 +554,13 @@ async def chat(req: ChatReq):
     c_alert.close()
     alert_injection = ""
     if _pending_alerts:
-        alert_lines = ["【緊急家庭警報，請在回覆開頭優先提醒主人】"]
+        alert_lines = [
+            "【阿福待確認的家人動態，請在回覆開頭以沉穩親切的語氣告知主人，不要製造恐慌】",
+            "說法範例：「主人，有件事想先跟您說一下。」或「主人，我注意到一件事，您參考一下。」"
+        ]
         for aid, aname, amsg, asev in _pending_alerts:
-            sev_tag = "🚨 緊急" if asev == "critical" else "⚠️ 注意"
-            alert_lines.append(f"{sev_tag} 警報#{aid}｜{amsg}")
-        alert_lines.append("提醒後若主人說「收到」請立刻呼叫 acknowledge_alert 確認。")
+            alert_lines.append(f"待告知事項 #{aid}（關於 {aname}）：{amsg}")
+        alert_lines.append("告知後若主人說「收到」「知道了」「沒事」，請呼叫 acknowledge_alert 工具確認。")
         alert_injection = "\n\n" + "\n".join(alert_lines)
 
     gcal_connected = gcal_service.is_connected(db) if gcal_service else False
