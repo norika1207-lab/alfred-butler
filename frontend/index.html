@@ -428,6 +428,9 @@ function typeWrite(text){
   const el=document.getElementById('afu-reply');
   el.textContent='';let i=0;
   const t=setInterval(()=>{if(i<text.length){el.textContent+=text[i++];}else clearInterval(t);},18);
+  // 會議錄音自動觸發
+  if(text.includes('開始錄音')||text.includes('我開始錄')) setTimeout(startMeeting,500);
+  else if((text.includes('整理會議')||text.includes('停止錄音'))&&typeof _recorder!=='undefined'&&_recorder) setTimeout(stopMeeting,300);
 }
 
 // Web Audio API — most reliable on iOS Safari
