@@ -1484,7 +1484,7 @@ async def chat(req: ChatReq):
                                 if candidate < today:
                                     candidate = _dt.date(today.year+1, int(month), int(day))
                                 days_away = (candidate - today).days
-                                upcoming.append((days_away, person, rel, etype, month, day, notes))
+                                upcoming.append((days_away, person, rel, etype, month, day, year, notes))
                             except Exception:
                                 pass
                         upcoming.sort()
@@ -1492,10 +1492,16 @@ async def chat(req: ChatReq):
                             res = "還沒有記錄任何紀念日。"
                         else:
                             lines = ["即將到來的紀念日："]
-                            for days, person, rel, etype, month, day, notes in upcoming[:8]:
+                            for days, person, rel, etype, month, day, year, notes in upcoming[:8]:
                                 hint = f"（{notes}）" if notes else ""
                                 when = "今天" if days == 0 else f"{days} 天後"
-                                lines.append(f"• {when}｜{person}（{rel}）{etype}｜{month}/{day} {hint}")
+                                yr_tag = ""
+                                if year:
+                                    import datetime as _dt2
+                                    elapsed = _dt2.date.today().year - int(year)
+                                    ms = {10:"十週年",20:"二十週年",25:"銀婚",50:"金婚",60:"鑽石婚"}
+                                    yr_tag = f" 第{elapsed}年" + (f"（{ms[elapsed]}）" if elapsed in ms else "")
+                                lines.append(f"• {when}｜{person}（{rel}）{etype}{yr_tag}｜{month}/{day} {hint}")
                             res = "\n".join(lines)
 
                 elif b.name == "acknowledge_alert":
