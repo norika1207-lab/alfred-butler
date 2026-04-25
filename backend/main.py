@@ -1099,6 +1099,116 @@ async def chat(req: ChatReq):
                             url = search_service.youtube_search_url(query) if search_service else f"https://www.youtube.com/results?search_query={query}"
                             action = {"type": "open_url", "url": url, "title": f"YouTube：{query}"}
                             res = f"為您在 YouTube 搜尋「{query}」"
+                elif b.name == "analyze_contract":
+                    mode = inp.get("mode", "request_upload")
+                    hint = (inp.get("hint") or "").strip()
+                    output_mode = inp.get("output", "report")
+
+                    if mode == "request_upload":
+                        action = {"type": "request_upload", "purpose": "contract",
+                                  "accept": ".pdf,.docx,.txt,.md",
+                                  "title": "請上傳合約檔案"}
+                        res = "已為主人準備上傳介面，請選擇合約檔案。"
+                    elif mode == "search_and_pick":
+                        # 搜：上傳檔案、Mac 索引；用 hint 或近期會議公司
+                        c2 = db()
+                        candidates = []
+                        kws = [hint] if hint else []
+                        # 從近期 7 天行事曆抽公司關鍵字補充猜測
+                        if not kws:
+                            ev = c2.execute(
+                                "SELECT title FROM calendar_events WHERE event_date >= date('now','-30 day') ORDER BY event_date DESC LIMIT 20"
+                            ).fetchall()
+                            kws = [r[0] for r in ev if r[0]][:5]
+
+                        for kw in (kws or [""]):
+                            like = f"%{kw}%" if kw else "%合約%"
+                            up = c2.execute(
+                                "SELECT id, original_name, ts FROM files "
+                                "WHERE (original_name LIKE ? OR description LIKE ? OR tags LIKE ?) "
+                                "AND (original_name LIKE '%.pdf' OR original_name LIKE '%.docx' OR original_name LIKE '%.txt') "
+                                "ORDER BY ts DESC LIMIT 5",
+                                (like, like, like)
+                            ).fetchall()
+                            for r in up:
+                                candidates.append({"src":"上傳", "id":r[0], "name":r[1], "ts":r[2][:10]})
+                            mac = c2.execute(
+                                "SELECT name, kind, modified FROM mac_files_index "
+                                "WHERE name LIKE ? AND (kind LIKE '%PDF%' OR kind LIKE '%Word%' OR name LIKE '%.docx') "
+                                "ORDER BY modified DESC LIMIT 5",
+                                (like,)
+                            ).fetchall()
+                            for r in mac:
+                                candidates.append({"src":"Mac", "id":None, "name":r[0], "ts":(r[2] or "")[:10]})
+                        c2.close()
+                        # dedupe
+                        seen = set(); uniq = []
+                        for c_ in candidates:
+                            k = (c_["src"], c_["name"])
+                            if k in seen: continue
+                            seen.add(k); uniq.append(c_)
+
+                        if len(uniq) == 1 and uniq[0]["src"] == "上傳":
+                            # 找到唯一一份上傳的合約 → 直接分析
+                            target_id = uniq[0]["id"]
+                            try:
+                                row = c.execute("SELECT filename, original_name, mime_type FROM files WHERE id=?", (target_id,)).fetchone()
+                                if row:
+                                    stored, name, mime = row
+                                    path = f"{FILE_DIR}/{stored}"
+                                    text = _extract_text_from_file(path, mime or "", name or "")
+                                    if text and not text.startswith("["):
+                                        if len(text) > 80000:
+                                            text = text[:80000] + "\n…[後段省略]"
+                                        prompt = f"請以繁中 Markdown 報告審閱以下合約：總結/雙方/重要條款/懲罰條款/紅旗/建議。\n\n{text}"
+                                        ar = client.messages.create(model="claude-sonnet-4-6", max_tokens=2500,
+                                                                    messages=[{"role":"user","content":prompt}])
+                                        report = "".join(x.text for x in ar.content if hasattr(x,"text"))
+                                        card = {"title": f"合約審閱：{name}", "content": report, "type": "document"}
+                                        res = f"已找到並分析「{name}」，報告卡片已準備好。"
+                                    else:
+                                        res = f"找到「{name}」但無法讀取內容：{text}"
+                                else:
+                                    res = "檔案資料異常"
+                            except Exception as e:
+                                res = f"分析失敗：{e}"
+                        elif len(uniq) > 1:
+                            lines = ["找到幾份可能的檔案，主人是哪一份？"]
+                            for i, c_ in enumerate(uniq[:8], 1):
+                                tag = f" (id={c_['id']})" if c_["id"] else " (Mac本機)"
+                                lines.append(f"{i}. {c_['name']} — {c_['src']} {c_['ts']}{tag}")
+                            res = "\n".join(lines)
+                        else:
+                            # 找不到 → 主動請主人提供關鍵字 / 或上傳
+                            action = {"type": "request_upload", "purpose": "contract",
+                                      "accept": ".pdf,.docx,.txt,.md",
+                                      "title": "找不到符合的合約，請上傳"}
+                            res = ("阿福在已有檔案中沒找到符合的合約。"
+                                   + ("（搜尋字：" + ", ".join(kws[:3]) + "）" if kws else "")
+                                   + " 主人記得任何關鍵字嗎？例如對方公司名、簽署日期、合約類型？或直接上傳檔案我立即審閱。")
+                    elif mode == "analyze_id":
+                        fid = inp.get("file_id")
+                        if not fid:
+                            res = "缺少 file_id"
+                        else:
+                            row = c.execute("SELECT filename, original_name, mime_type FROM files WHERE id=?", (fid,)).fetchone()
+                            if not row:
+                                res = "找不到該檔案"
+                            else:
+                                stored, name, mime = row
+                                path = f"{FILE_DIR}/{stored}"
+                                text = _extract_text_from_file(path, mime or "", name or "")
+                                if not text or text.startswith("["):
+                                    res = text or "讀取失敗"
+                                else:
+                                    if len(text) > 80000:
+                                        text = text[:80000] + "\n…[後段省略]"
+                                    prompt = f"請以繁中 Markdown 報告審閱以下合約：總結/雙方/重要條款/懲罰條款/紅旗/建議。\n\n{text}"
+                                    ar = client.messages.create(model="claude-sonnet-4-6", max_tokens=2500,
+                                                                messages=[{"role":"user","content":prompt}])
+                                    report = "".join(x.text for x in ar.content if hasattr(x,"text"))
+                                    card = {"title": f"合約審閱：{name}", "content": report, "type": "document"}
+                                    res = f"「{name}」審閱完成，報告卡片已準備好。"
 
                 c.commit(); c.close()
                 results.append({"type": "tool_result", "tool_use_id": b.id, "content": res})
