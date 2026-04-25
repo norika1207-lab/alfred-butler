@@ -136,7 +136,7 @@ app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 DB = "/opt/alfred/data/alfred.db"
-client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 
 def db():
     return sqlite3.connect(DB)
