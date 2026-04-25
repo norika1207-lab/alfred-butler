@@ -2687,12 +2687,8 @@ async def tts(req: TTSReq):
     if not el_key:
         return StreamingResponse(iter([b""]), media_type="audio/mpeg")
 
-    # 偵測語言，自動選聲音
     lang = _detect_lang(req.text)
-    # 中文 → Neil Chuang（台灣腔），英文 → Alfred（Michael Caine）
-    VOICE_ZH = "auoHciLZJwKTwYUoRTYz"   # Neil Chuang - calm, Taiwan Mandarin
-    VOICE_EN = "YWnZZfEtTni5X2rz4DEg"   # Alfred 阿福 (Michael Caine clone)
-    selected_voice = VOICE_ZH if lang == "zh" else VOICE_EN
+    VOICE_ID = "YWnZZfEtTni5X2rz4DEg"  # Alfred 阿福 (Michael Caine)
 
     # 清理文字：去掉 TTS 念不好的符號
     import re as _re
