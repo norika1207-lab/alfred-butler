@@ -293,6 +293,14 @@ body.listening #waveform{opacity:1;}
   <button id="txt-send" onclick="sendTyped()">↑</button>
 </div>
 
+<!-- Ambient listening bar (top, shown when recording) -->
+<div id="ambient-bar">
+  <div id="ambient-dot"></div>
+  <div id="ambient-label">阿福聆聽中</div>
+  <div id="ambient-counter">0 段</div>
+  <button id="ambient-stop" onclick="stopAmbient()">停止 · 出報告</button>
+</div>
+
 <!-- media player -->
 <div id="media-player">
   <button id="mp-close" onclick="closeMediaPlayer()">✕</button>
