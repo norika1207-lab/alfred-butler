@@ -3405,11 +3405,48 @@ async def location_context():
             greeting = f"主人，您到健身房了。記得暖身，我在旁邊待機。"
 
         if greeting:
-            # 記錄已問候
             c.execute(
                 "INSERT INTO memories (category,key,value,ts) VALUES (?,?,?,?)",
                 ("context_greeted", context_type, f"{today} {datetime.now().strftime('%H:%M')}", datetime.now().isoformat())
             )
+            c.commit()
+
+    # ── 自動打卡：到公司 → 補上班記錄；離家時間晚 → 補下班記錄 ──────────────
+    checkin_recorded = False
+    checkout_recorded = False
+    now_iso = datetime.now().isoformat()
+
+    if context_type == "office":
+        row = c.execute("SELECT id, check_in FROM attendance WHERE date=?", (today,)).fetchone()
+        if not row or not row[1]:
+            # 今天還沒有上班打卡 → 自動打卡
+            if row:
+                c.execute("UPDATE attendance SET check_in=?,lat_in=?,lng_in=?,type=?,verified=1 WHERE id=?",
+                          (now_iso, lat, lng, "office", row[0]))
+            else:
+                c.execute("INSERT INTO attendance (date,check_in,lat_in,lng_in,type,verified) VALUES (?,?,?,?,?,1)",
+                          (today, now_iso, lat, lng, "office"))
+            checkin_recorded = True
+            if greeting:
+                greeting += f"\n\n已為您記錄今日上班時間：{now_iso[11:16]}。此記錄含 GPS 座標，如日後人資對出勤有疑問，您可出示這份記錄。"
+            c.commit()
+
+    elif context_type == "home":
+        # 回到家 → 看今天有沒有下班記錄，沒有就補上
+        row = c.execute("SELECT id,check_in,check_out FROM attendance WHERE date=?", (today,)).fetchone()
+        if row and row[1] and not row[2]:
+            try:
+                import datetime as _dt2
+                ci = _dt2.datetime.fromisoformat(row[1])
+                dur = int((_dt2.datetime.fromisoformat(now_iso) - ci).total_seconds() / 60)
+            except Exception:
+                dur = None
+            c.execute("UPDATE attendance SET check_out=?,lat_out=?,lng_out=?,duration_min=?,verified=1 WHERE id=?",
+                      (now_iso, lat, lng, dur, row[0]))
+            checkout_recorded = True
+            dur_str = f"，今日在公司共 {dur//60} 小時 {dur%60} 分鐘" if dur else ""
+            if greeting:
+                greeting += f"\n\n已記錄今日下班時間：{now_iso[11:16]}{dur_str}。記錄已存檔，含 GPS 驗證。"
             c.commit()
 
     c.close()
@@ -3417,7 +3454,9 @@ async def location_context():
         "context": context_type,
         "name": context_name,
         "lat": lat, "lng": lng,
-        "greeting": greeting
+        "greeting": greeting,
+        "checkin_recorded": checkin_recorded,
+        "checkout_recorded": checkout_recorded,
     }
 
 
