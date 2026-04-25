@@ -2024,18 +2024,78 @@ async def greet():
                 break
     c_ctx.close()
 
+    # ── 紀念日提前三天提醒 ──────────────────────────────────────────────────
+    import datetime as _dt
+    ann_hint = ""
+    c_ann = db()
+    ann_rows = c_ann.execute("SELECT person,relation,event_type,month,day,notes FROM anniversaries").fetchall()
+    c_ann.close()
+    today_d = _dt.date.today()
+    for person, rel, etype, month, day, notes in ann_rows:
+        if not month or not day:
+            continue
+        try:
+            candidate = _dt.date(today_d.year, int(month), int(day))
+            if candidate < today_d:
+                candidate = _dt.date(today_d.year + 1, int(month), int(day))
+            days_away = (candidate - today_d).days
+            if days_away <= 3:
+                type_label = {"birthday":"生日","anniversary":"結婚紀念日","work":"入職週年"}.get(etype, etype)
+                if days_away == 0:
+                    ann_hint = f"今天是{person}（{rel}）的{type_label}，記得說聲祝福。"
+                elif days_away == 1:
+                    ann_hint = f"明天是{person}（{rel}）的{type_label}，提前準備一下。"
+                else:
+                    ann_hint = f"{days_away}天後是{person}（{rel}）的{type_label}，{('備注：' + notes) if notes else '早點安排'}。"
+                break  # 一次只說一件
+        except Exception:
+            pass
+
+    # ── 未兌現承諾提醒（follow_up 最老的一筆）───────────────────────────────
+    c_p = db()
+    old_promise = c_p.execute(
+        "SELECT to_whom,content FROM promises WHERE status='pending' ORDER BY noted_at ASC LIMIT 1"
+    ).fetchone()
+    c_p.close()
+
+    # ── 寵物耗材快沒了 ──────────────────────────────────────────────────────
+    c_pet = db()
+    pet_supply_warn = ""
+    supply_rows = c_pet.execute(
+        "SELECT ps.item, ps.last_bought, ps.est_days_total, p.name "
+        "FROM pet_supplies ps LEFT JOIN pets p ON ps.pet_id=p.id "
+        "ORDER BY ps.last_bought ASC LIMIT 10"
+    ).fetchall()
+    c_pet.close()
+    for item, last_bought, est, pet in supply_rows:
+        if last_bought and est:
+            try:
+                bought = _dt.date.fromisoformat(last_bought)
+                remain = max(0, est - (today_d - bought).days)
+                if remain <= 5:
+                    pet_supply_warn = f"{pet or ''}的「{item}」大概只剩 {remain} 天了，需要我幫您補貨嗎？"
+                    break
+            except Exception:
+                pass
+
     parts = [f"主人，{period}。"]
     if late_night_care:
         parts.append(late_night_care)
     elif weather:
         parts.append(f"{weather}。")
     if not late_night_care:
+        if ann_hint:
+            parts.append(ann_hint)
         if events_today:
             ev = events_today[0]
             t = f"{ev[1]}，" if ev[1] else ""
             parts.append(f"今天{t}有「{ev[0]}」。")
         if todos_followup:
             parts.append(f"「{todos_followup[0]}」這件事，還沒處理。")
+        if old_promise and not todos_followup:
+            parts.append(f"另外，您之前答應{old_promise[0]}要{old_promise[1]}，還沒跟進。")
+        if pet_supply_warn:
+            parts.append(pet_supply_warn)
 
     # Proactive connection nudge — check what's not yet connected
     c2 = db()
