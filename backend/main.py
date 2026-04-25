@@ -2467,7 +2467,7 @@ async def greet():
                                    if cat in ("drink","food","gift")]
 
                     # 找這個人所有偏好
-                    person_prefs = [(cat, cont) for p, _, cat, cont, imp in all_prefs if p == person]
+                    person_prefs = [(cat2, cont2) for p2, rel2, cat2, cont2, imp2 in all_prefs if p2 == person]
                     drinks = [cont for cat, cont in person_prefs if cat == "drink"]
                     foods  = [cont for cat, cont in person_prefs if cat == "food"]
                     gifts  = [cont for cat, cont in person_prefs if cat == "gift"]
