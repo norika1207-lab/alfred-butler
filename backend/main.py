@@ -685,6 +685,17 @@ TOOLS = [
          "question": {"type": "string", "description": "主人對圖片的問題"}
      }, "required": ["question"]}},
 
+    {"name": "find_anything", "description":
+        "語意智慧搜尋：找任何東西——檔案、合約、報價單、照片、設計稿、提案、食譜、餐廳、產品、記憶。"
+        "主人說的話永遠模糊，阿福要能從碎片找到他要的東西。"
+        "搜尋範圍：上傳的檔案（全文+AI標籤）、Mac本機、Google Drive、會議記錄、記憶庫、網路。"
+        "主人說「那份合約」「跟陳總的那個」「上次開會用的提案」「有一張照片有我們團隊」都適用。",
+     "input_schema": {"type": "object", "properties": {
+         "query": {"type": "string", "description": "主人說的原話，越完整越好"},
+         "scope": {"type": "string", "enum": ["all","files","web","memory"],
+                   "description": "all=全部搜，files=只找檔案，web=網路搜尋，memory=找阿福記憶的事"}
+     }, "required": ["query"]}},
+
     {"name": "manage_files", "description": "查詢或搜尋主人的檔案（Mac本機 + 上傳的檔案 + Google Drive）。主人說「查一下我的檔案」「找一下那份合約」時使用",
      "input_schema": {"type": "object", "properties": {
          "action": {"type": "string", "enum": ["list_all", "list_drive", "search_all", "search_drive"],
