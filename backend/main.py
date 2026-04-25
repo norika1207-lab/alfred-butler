@@ -1882,7 +1882,9 @@ async def sms_reply(request: Request):
 FILE_DIR = "/opt/alfred/data/files"
 
 @app.post("/api/files/upload")
-async def upload_file(file: UploadFile = File(...), description: str = "", tags: str = ""):
+async def upload_file(file: UploadFile = File(...),
+                      description: str = Form(""),
+                      tags: str = Form("")):
     """Upload a file from phone/computer to Alfred's local storage."""
     import uuid, pathlib, shutil
     ext = pathlib.Path(file.filename or "file").suffix
