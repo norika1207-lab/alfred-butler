@@ -719,8 +719,29 @@ async function pollLocationContext() {
     }
   } catch(e) {}
 }
-setInterval(pollLocationContext, 5 * 60 * 1000);  // 每 5 分鐘
-setTimeout(pollLocationContext, 8000);             // 開啟後 8 秒先跑一次
+setInterval(pollLocationContext, 5 * 60 * 1000);
+setTimeout(pollLocationContext, 8000);
+
+// ── 拜訪前提醒：每 30 分鐘掃一次，有行程 + 已知偏好 → 主動提示 ──────────
+let _lastVisitReminderId = 0;
+async function pollVisitPrep() {
+  try {
+    const r = await fetch(API + '/visit/prep');
+    const d = await r.json();
+    if (d.reminders && d.reminders.length > 0) {
+      const rem = d.reminders[0];
+      if (rem.event_id !== _lastVisitReminderId) {
+        _lastVisitReminderId = rem.event_id;
+        setTimeout(() => {
+          typeWrite(rem.message);
+          if (typeof speak === 'function') speak(rem.message);
+        }, 1000);
+      }
+    }
+  } catch(e) {}
+}
+setInterval(pollVisitPrep, 30 * 60 * 1000);
+setTimeout(pollVisitPrep, 12000);
 
 function showAmbientOffer() {
   const existing = document.getElementById('ambient-offer');
