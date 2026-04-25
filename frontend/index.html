@@ -892,6 +892,74 @@ function closeUploadOverlay() {
   if (o) o.remove();
 }
 
+// ── 即時翻譯播放 ─────────────────────────────────────────────────────────────
+let _translateOverlay = null;
+
+async function playTranslation(action) {
+  const translated = action.translated || '';
+  const lang = action.lang || 'en';
+  const langName = action.lang_name || '';
+  const direction = action.direction || 'to_foreign';
+
+  // 顯示翻譯卡（大字，給對方看 / 給主人看）
+  closeTranslateOverlay();
+  const overlay = document.createElement('div');
+  overlay.id = 'translate-overlay';
+  const isForeign = direction === 'to_foreign';
+  overlay.style.cssText = `
+    position:fixed;inset:0;background:${isForeign ? '#0a0705' : 'rgba(18,14,8,0.97)'};
+    z-index:400;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;padding:32px 24px;`;
+
+  overlay.innerHTML = `
+    <div style="font-size:11px;letter-spacing:3px;color:rgba(201,168,76,0.6);margin-bottom:16px;text-transform:uppercase;">
+      ${isForeign ? langName : '阿福翻譯'}
+    </div>
+    <div style="font-size:${isForeign ? 32 : 26}px;line-height:1.5;text-align:center;
+      color:#e8d5b7;font-weight:${isForeign ? 700 : 400};max-width:340px;">
+      ${translated}
+    </div>
+    ${isForeign ? `<div style="font-size:13px;color:rgba(232,213,183,0.4);margin-top:24px;text-align:center;">
+      將手機給對方看<br>或等阿福念完
+    </div>` : ''}
+    <button onclick="closeTranslateOverlay()" style="
+      margin-top:36px;padding:12px 32px;border-radius:24px;
+      border:1px solid rgba(201,168,76,0.4);background:rgba(201,168,76,0.08);
+      color:#c9a84c;font-size:14px;cursor:pointer;">關閉</button>`;
+  document.body.appendChild(overlay);
+  _translateOverlay = overlay;
+
+  // 播放 TTS（ElevenLabs 多語言）
+  if (translated) {
+    try {
+      const fd = new FormData();
+      fd.append('text', translated);
+      fd.append('target_lang', lang);
+      fd.append('source_lang', 'auto');
+      fd.append('mode', 'interpret');
+      const r = await fetch('/api/translate/tts', {method:'POST', body: fd});
+      if (r.ok) {
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        // 如果是說給外國人聽，音量大一點，語速正常
+        audio.play().catch(()=>{});
+        audio.onended = () => URL.revokeObjectURL(url);
+      }
+    } catch(e) { console.warn('translate tts', e); }
+  }
+}
+
+function closeTranslateOverlay() {
+  const o = document.getElementById('translate-overlay');
+  if (o) o.remove();
+  _translateOverlay = null;
+}
+
+function showTranslateHistory() {
+  // placeholder for nav button if ever needed
+}
+
 // ── Ambient "阿福聆聽中" mode ───────────────────────────────────────────────
 let _ambSessionId = null;
 let _ambMediaRecorder = null;
