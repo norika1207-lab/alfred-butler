@@ -1476,7 +1476,7 @@ async def chat(req: ChatReq):
                         today = _dt.date.today()
                         rows = c.execute("SELECT person,relation,event_type,month,day,year,notes FROM anniversaries").fetchall()
                         upcoming = []
-                        for person, rel, etype, month, day, notes in rows:
+                        for person, rel, etype, month, day, year, notes in rows:
                             if not month or not day:
                                 continue
                             try:
