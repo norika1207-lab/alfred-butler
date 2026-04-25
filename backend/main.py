@@ -1439,6 +1439,118 @@ async def chat(req: ChatReq):
                             url = search_service.youtube_search_url(query) if search_service else f"https://www.youtube.com/results?search_query={query}"
                             action = {"type": "open_url", "url": url, "title": f"YouTube：{query}"}
                             res = f"為您在 YouTube 搜尋「{query}」"
+                elif b.name == "attendance":
+                    import datetime as _dt
+                    aa = inp.get("action","today")
+                    target_date = inp.get("date") or _dt.date.today().isoformat()
+                    now_iso = datetime.now().isoformat()
+
+                    if aa == "checkin":
+                        existing = c.execute("SELECT id,check_in FROM attendance WHERE date=?", (target_date,)).fetchone()
+                        if existing and existing[1]:
+                            res = f"您在 {target_date} 已記錄上班時間 {existing[1][11:16]}，不重複打卡。"
+                        else:
+                            cur_loc = c.execute("SELECT lat,lng,ts FROM location_log ORDER BY id DESC LIMIT 1").fetchone()
+                            lat = cur_loc[0] if cur_loc else None
+                            lng = cur_loc[1] if cur_loc else None
+                            if existing:
+                                c.execute("UPDATE attendance SET check_in=?,lat_in=?,lng_in=? WHERE id=?",
+                                          (now_iso, lat, lng, existing[0]))
+                            else:
+                                c.execute("INSERT INTO attendance (date,check_in,lat_in,lng_in,type,verified) VALUES (?,?,?,?,?,?)",
+                                          (target_date, now_iso, lat, lng, "office", 1))
+                            res = f"上班打卡完成：{target_date} {now_iso[11:16]}，GPS 座標已記錄為佐證。"
+
+                    elif aa == "checkout":
+                        row = c.execute("SELECT id,check_in FROM attendance WHERE date=?", (target_date,)).fetchone()
+                        cur_loc = c.execute("SELECT lat,lng FROM location_log ORDER BY id DESC LIMIT 1").fetchone()
+                        lat = cur_loc[0] if cur_loc else None
+                        lng = cur_loc[1] if cur_loc else None
+                        dur = None
+                        if row and row[1]:
+                            try:
+                                ci = _dt.datetime.fromisoformat(row[1])
+                                dur = int((_dt.datetime.fromisoformat(now_iso) - ci).total_seconds() / 60)
+                            except Exception:
+                                pass
+                        if row:
+                            c.execute("UPDATE attendance SET check_out=?,lat_out=?,lng_out=?,duration_min=? WHERE id=?",
+                                      (now_iso, lat, lng, dur, row[0]))
+                        else:
+                            c.execute("INSERT INTO attendance (date,check_in,check_out,lat_out,lng_out,type,duration_min,verified) VALUES (?,?,?,?,?,?,?,?)",
+                                      (target_date, None, now_iso, lat, lng, "office", dur, 1))
+                        dur_str = f"，在公司共 {dur//60} 小時 {dur%60} 分鐘" if dur else ""
+                        res = f"下班打卡完成：{target_date} {now_iso[11:16]}{dur_str}。記錄已存檔。"
+
+                    elif aa == "wfh":
+                        notes = inp.get("notes","居家辦公")
+                        existing = c.execute("SELECT id FROM attendance WHERE date=?", (target_date,)).fetchone()
+                        if existing:
+                            c.execute("UPDATE attendance SET type='wfh',notes=? WHERE id=?", (notes, existing[0]))
+                        else:
+                            c.execute("INSERT INTO attendance (date,check_in,type,notes,verified) VALUES (?,?,?,?,?)",
+                                      (target_date, now_iso, "wfh", notes, 1))
+                        res = f"已記錄 {target_date} 居家辦公（{notes}），時間 {now_iso[11:16]}。"
+
+                    elif aa == "leave":
+                        notes = inp.get("notes","請假")
+                        existing = c.execute("SELECT id FROM attendance WHERE date=?", (target_date,)).fetchone()
+                        if existing:
+                            c.execute("UPDATE attendance SET type='leave',notes=?,check_in=NULL WHERE id=?", (notes, existing[0]))
+                        else:
+                            c.execute("INSERT INTO attendance (date,type,notes,verified) VALUES (?,?,?,?)",
+                                      (target_date, "leave", notes, 1))
+                        res = f"已記錄 {target_date} 請假（{notes}）。"
+
+                    elif aa == "today":
+                        row = c.execute(
+                            "SELECT check_in,check_out,type,duration_min,notes FROM attendance WHERE date=?",
+                            (target_date,)
+                        ).fetchone()
+                        if not row:
+                            res = f"今天（{target_date}）還沒有打卡記錄。"
+                        else:
+                            ci = row[0][11:16] if row[0] else "未記錄"
+                            co = row[1][11:16] if row[1] else "尚未離開"
+                            tp = {"office":"進公司","wfh":"居家辦公","leave":"請假"}.get(row[2], row[2])
+                            dur = f"，共 {row[3]//60}h{row[3]%60}m" if row[3] else ""
+                            notes_str = f"（{row[4]}）" if row[4] else ""
+                            res = f"{target_date} {tp}{notes_str}：上班 {ci} / 下班 {co}{dur}。GPS 已驗證。"
+
+                    elif aa == "report":
+                        month = inp.get("month") or _dt.date.today().strftime("%Y-%m")
+                        rows = c.execute(
+                            "SELECT date,check_in,check_out,type,duration_min,notes,lat_in,lng_in "
+                            "FROM attendance WHERE date LIKE ? ORDER BY date ASC",
+                            (f"{month}%",)
+                        ).fetchall()
+                        if not rows:
+                            res = f"{month} 沒有出勤記錄。"
+                        else:
+                            office_days = sum(1 for r in rows if r[3]=="office" and r[1])
+                            wfh_days   = sum(1 for r in rows if r[3]=="wfh")
+                            leave_days = sum(1 for r in rows if r[3]=="leave")
+                            total_min  = sum(r[4] or 0 for r in rows)
+                            lines = [f"📋 {month} 出勤報告（共 {len(rows)} 個工作日記錄）\n"]
+                            lines.append(f"進公司：{office_days} 天 ｜ 居家辦公：{wfh_days} 天 ｜ 請假：{leave_days} 天")
+                            lines.append(f"實際在公司總時數：約 {total_min//60} 小時\n")
+                            lines.append("日期詳細：")
+                            for r in rows:
+                                date_str = r[0]
+                                tp_tag = {"office":"✅ 進公司","wfh":"🏠 居家","leave":"🏖 請假"}.get(r[3],"？")
+                                ci = r[1][11:16] if r[1] else "—"
+                                co = r[2][11:16] if r[2] else "—"
+                                dur = f"{r[4]//60}h{r[4]%60}m" if r[4] else "—"
+                                gps = "📍" if r[6] else ""
+                                note = f" ({r[5]})" if r[5] else ""
+                                lines.append(f"{date_str} {tp_tag} {ci}→{co} {dur} {gps}{note}")
+                            lines.append("\n⚠️ 每筆含 GPS 座標（📍）記錄均可作為出勤佐證資料。如人資有疑問，請告知阿福，我可以匯出詳細清單。")
+                            res = "\n".join(lines)
+                            card = {"title": f"{month} 出勤報告", "content": res, "type": "document"}
+                            res = f"{month} 出勤報告已整理完成，卡片已顯示。"
+
+                    c.commit()
+
                 elif b.name == "pet_care":
                     pa = inp.get("action")
                     pname = (inp.get("pet_name") or "").strip()
