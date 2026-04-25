@@ -30,6 +30,24 @@ else:
     LLM_MODEL_HEAVY = "claude-sonnet-4-6"
 
 
+def _simple_chat(prompt: str, max_tokens: int = 3000) -> str:
+    """單輪 LLM 呼叫（無工具），用於合約分析、報告生成等。"""
+    if LLM_PROVIDER == "gemini":
+        resp = _llm.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens
+        )
+        return resp.choices[0].message.content or ""
+    elif client:
+        resp = client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return "".join(b.text for b in resp.content if hasattr(b, "text"))
+    return ""
+
+
 def _tools_to_oai(tools: list) -> list:
     """把 Anthropic 格式的 TOOLS 轉成 OpenAI / Gemini 格式。"""
     out = []
