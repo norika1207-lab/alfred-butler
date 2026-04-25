@@ -1162,6 +1162,95 @@ async def chat(req: ChatReq):
                             url = search_service.youtube_search_url(query) if search_service else f"https://www.youtube.com/results?search_query={query}"
                             action = {"type": "open_url", "url": url, "title": f"YouTube：{query}"}
                             res = f"為您在 YouTube 搜尋「{query}」"
+                elif b.name == "family_location":
+                    fl_action = inp.get("action", "all")
+                    c2 = db()
+                    if fl_action == "all":
+                        rows = c2.execute(
+                            "SELECT name,relation,last_address,last_seen,is_home,battery FROM family_members ORDER BY id"
+                        ).fetchall()
+                        if not rows:
+                            res = "目前還沒有加入任何家庭成員。主人可以說「新增太太」或「邀請兒子」來開始設定。"
+                        else:
+                            lines = ["目前家人位置："]
+                            for r in rows:
+                                seen = r[3][11:16] if r[3] else "未知"
+                                home_tag = "（在家 🏠）" if r[4] else ""
+                                bat = f" 電量{r[5]}%" if r[5] and r[5] >= 0 else ""
+                                lines.append(f"• {r[0]}（{r[1]}）{home_tag}：{r[2] or '位置未知'} [{seen}]{bat}")
+                            res = "\n".join(lines)
+                    elif fl_action == "where_is":
+                        name = inp.get("name", "")
+                        row = c2.execute(
+                            "SELECT name,relation,last_address,last_seen,is_home,battery,last_lat,last_lng "
+                            "FROM family_members WHERE name LIKE ? ORDER BY id LIMIT 1",
+                            (f"%{name}%",)
+                        ).fetchone()
+                        if not row:
+                            res = f"找不到「{name}」，主人確認一下名字？"
+                        else:
+                            seen = row[3][11:16] if row[3] else "未知"
+                            home_tag = "目前在家 🏠" if row[4] else "不在家"
+                            bat = f"，手機電量 {row[5]}%" if row[5] and row[5] >= 0 else ""
+                            maps = _maps_link(row[6], row[7]) if row[6] else ""
+                            res = f"{row[0]}（{row[1]}）{home_tag}，最後更新 {seen}。地址：{row[2] or '未知'}{bat}。{maps}"
+                    elif fl_action == "arrivals":
+                        rows = c2.execute(
+                            "SELECT key,value,ts FROM memories WHERE category='family_arrival' ORDER BY ts DESC LIMIT 10"
+                        ).fetchall()
+                        if not rows:
+                            res = "最近沒有家人到達的紀錄。"
+                        else:
+                            lines = ["最近的到達紀錄："] + [f"• {r[1]}" for r in rows]
+                            res = "\n".join(lines)
+                    elif fl_action == "add_member":
+                        name = inp.get("name", "").strip()
+                        relation = inp.get("relation", "家人")
+                        if not name:
+                            res = "需要提供家人名字。"
+                        else:
+                            existing = c2.execute("SELECT COUNT(*) FROM family_members").fetchone()[0]
+                            color = _family_avatar_colors()[existing % len(_family_avatar_colors())]
+                            c2.execute(
+                                "INSERT INTO family_members (name,relation,avatar_color,noted_at) VALUES (?,?,?,?)",
+                                (name, relation, color, datetime.now().isoformat())
+                            )
+                            c2.commit()
+                            mid = c2.execute("SELECT last_insert_rowid()").fetchone()[0]
+                            res = f"已新增「{name}（{relation}）」，編號 #{mid}。接下來幫 {name} 產生邀請連結？只要說「邀請 {name}」就可以了。"
+                    elif fl_action == "invite":
+                        member_id = inp.get("member_id")
+                        if not member_id:
+                            # 試著用 name 找
+                            name = inp.get("name", "")
+                            row = c2.execute(
+                                "SELECT id,name FROM family_members WHERE name LIKE ? LIMIT 1",
+                                (f"%{name}%",)
+                            ).fetchone() if name else None
+                            member_id = row[0] if row else None
+                        if not member_id:
+                            res = "請指定要邀請的家人名字。"
+                        else:
+                            import datetime as _dt, secrets as _sec
+                            row = c2.execute("SELECT name FROM family_members WHERE id=?", (member_id,)).fetchone()
+                            mname = row[0] if row else "家人"
+                            token = _sec.token_urlsafe(20)
+                            expires = (_dt.datetime.now() + _dt.timedelta(days=7)).isoformat()
+                            c2.execute("DELETE FROM family_invites WHERE member_id=?", (member_id,))
+                            c2.execute(
+                                "INSERT INTO family_invites (token,member_id,created_at,expires_at) VALUES (?,?,?,?)",
+                                (token, member_id, datetime.now().isoformat(), expires)
+                            )
+                            c2.commit()
+                            invite_url = f"/alfred/join?t={token}"
+                            action = {"type": "show_qr", "url": invite_url,
+                                      "title": f"邀請 {mname} 加入家庭位置共享",
+                                      "token": token}
+                            res = (f"已為「{mname}」產生邀請連結（7 天有效）。\n"
+                                   f"請讓 {mname} 掃描 QR code 或開啟連結：{invite_url}\n"
+                                   f"對方安裝阿福 App 並點連結後，位置就會自動同步。")
+                    c2.commit(); c2.close()
+
                 elif b.name == "ambient_mode":
                     amb_action = inp.get("action", "start")
                     amb_label = inp.get("label", "")
