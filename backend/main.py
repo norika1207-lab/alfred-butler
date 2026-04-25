@@ -2529,6 +2529,199 @@ async def transcribe_audio(file: UploadFile = File(...)):
         import os as _os; _os.unlink(tmp_path)
 
 
+_SENSITIVE_PATTERNS = [
+    r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b',   # 信用卡
+    r'\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b',                # SSN 格式
+    r'password|密碼|帳號密碼|PIN碼',
+    r'[\w.+-]+@[\w-]+\.[a-z]{2,}',                     # email (保留姓名，濾 email)
+]
+
+def _filter_sensitive(text: str) -> str:
+    import re
+    for pat in _SENSITIVE_PATTERNS:
+        text = re.sub(pat, '[已過濾]', text, flags=re.IGNORECASE)
+    return text
+
+
+# ── Ambient "阿福聆聽中" mode ────────────────────────────────────────────────
+
+@app.post("/api/ambient/start")
+async def ambient_start(request: Request):
+    body = await request.json()
+    label = body.get("label", f"辦公記錄 {datetime.now().strftime('%m/%d')}")
+    now = datetime.now().isoformat()
+    c = db()
+    c.execute(
+        "INSERT INTO ambient_sessions (date,label,status,started_at) VALUES (?,?,?,?)",
+        (datetime.now().strftime("%Y-%m-%d"), label, "recording", now)
+    )
+    c.commit()
+    session_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+    c.close()
+    return {"ok": True, "session_id": session_id, "label": label, "started_at": now}
+
+
+@app.post("/api/ambient/chunk/{session_id}")
+async def ambient_chunk(session_id: int, file: UploadFile = File(...)):
+    """接收一段音頻，轉錄並過濾敏感資訊，存入 ambient_chunks。"""
+    import openai as _oai, tempfile, pathlib, os as _os
+    _oai.api_key = os.getenv("OPENAI_API_KEY", "")
+
+    audio_bytes = await file.read()
+    if not audio_bytes or len(audio_bytes) < 1000:
+        return {"ok": True, "skipped": True, "reason": "too short"}
+
+    suffix = pathlib.Path(file.filename or "chunk.webm").suffix or ".webm"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(audio_bytes); tmp_path = tmp.name
+
+    raw = ""
+    try:
+        with open(tmp_path, "rb") as f:
+            result = _oai.audio.transcriptions.create(
+                model="whisper-1", file=f,
+                language="zh", response_format="text"
+            )
+        raw = result if isinstance(result, str) else getattr(result, "text", "")
+    except Exception as e:
+        raw = f"[轉錄失敗：{e}]"
+    finally:
+        _os.unlink(tmp_path)
+
+    filtered = _filter_sensitive(raw)
+
+    c = db()
+    c.execute(
+        "SELECT COALESCE(MAX(seq),0)+1 FROM ambient_chunks WHERE session_id=?", (session_id,)
+    )
+    seq = c.fetchone()[0]
+    c.execute(
+        "INSERT INTO ambient_chunks (session_id,seq,raw_transcript,filtered_transcript,ts) VALUES (?,?,?,?,?)",
+        (session_id, seq, raw, filtered, datetime.now().isoformat())
+    )
+    c.commit(); c.close()
+
+    return {"ok": True, "session_id": session_id, "seq": seq,
+            "chars": len(raw), "filtered": filtered != raw}
+
+
+@app.post("/api/ambient/stop/{session_id}")
+async def ambient_stop(session_id: int):
+    """停止記錄，用 Claude 整理今日動態報告。"""
+    c = db()
+    session = c.execute(
+        "SELECT label, started_at, date FROM ambient_sessions WHERE id=?", (session_id,)
+    ).fetchone()
+    if not session:
+        c.close(); return {"ok": False, "error": "session not found"}
+
+    label, started_at, date = session
+    chunks = c.execute(
+        "SELECT seq, filtered_transcript, ts FROM ambient_chunks "
+        "WHERE session_id=? ORDER BY seq ASC",
+        (session_id,)
+    ).fetchall()
+
+    if not chunks:
+        c.execute("UPDATE ambient_sessions SET status='stopped',stopped_at=? WHERE id=?",
+                  (datetime.now().isoformat(), session_id))
+        c.commit(); c.close()
+        return {"ok": True, "session_id": session_id, "report": "這段時間沒有錄到內容。"}
+
+    # 組合所有逐字稿，加上時間戳
+    timeline_parts = []
+    for seq, text, ts in chunks:
+        t = ts[11:16] if ts else ""
+        if text.strip():
+            timeline_parts.append(f"[{t}] {text.strip()}")
+    full_text = "\n".join(timeline_parts)
+
+    # Claude 整理報告
+    now_str = datetime.now().strftime("%Y/%m/%d %H:%M")
+    prompt = f"""以下是主人今日辦公期間的對話/會議語音記錄（已過濾敏感資訊），時間從 {started_at[11:16]} 到 {now_str}，共 {len(chunks)} 段。
+
+請整理成「今日動態綜合報告」，格式如下（繁體中文，語氣像資深管家做的日誌，簡潔有力）：
+
+## 📋 {date} 辦公記錄｜{label}
+
+### 一、主要話題與討論
+（條列今天談過的主題，每項一句話）
+
+### 二、決策事項
+（列出今天做出的決定，無則寫「無明確決策」）
+
+### 三、待辦 / 承諾追蹤
+（格式：- 【誰】要做什麼 by 何時。若不確定就寫大約時間。）
+
+### 四、重要提及的人名 / 公司
+（今天對話中出現的人、組織、客戶名稱）
+
+### 五、阿福備注
+（阿福認為主人需要特別留意的事、尚未跟進的問題、或建議採取的行動）
+
+---
+語音記錄：
+{full_text[:12000]}"""
+
+    resp = client.messages.create(
+        model="claude-sonnet-4-6", max_tokens=2000,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    report = "".join(b.text for b in resp.content if hasattr(b, "text"))
+
+    now_iso = datetime.now().isoformat()
+    c.execute(
+        "UPDATE ambient_sessions SET status='stopped', stopped_at=?, report=? WHERE id=?",
+        (now_iso, report, session_id)
+    )
+
+    # 抽 action items → 存 todos
+    for line in report.split("\n"):
+        l = line.strip()
+        if l.startswith("- 【") and "】" in l:
+            title = l[2:]  # strip "- "
+            c.execute(
+                "INSERT INTO todos (title,due_date,status,ts) VALUES (?,?,?,?)",
+                (f"[辦公記錄] {title}", "", "pending", now_iso)
+            )
+
+    # 儲存一份 meeting_notes 以便日後查詢
+    c.execute(
+        "INSERT INTO meeting_notes (title,transcript,summary,action_items,ts) VALUES (?,?,?,?,?)",
+        (f"{label} ({date})", full_text[:20000], report, "", now_iso)
+    )
+    c.commit(); c.close()
+
+    return {"ok": True, "session_id": session_id, "report": report,
+            "chunks": len(chunks), "stopped_at": now_iso}
+
+
+@app.get("/api/ambient/status/{session_id}")
+def ambient_status(session_id: int):
+    c = db()
+    s = c.execute(
+        "SELECT id,label,status,started_at,stopped_at FROM ambient_sessions WHERE id=?", (session_id,)
+    ).fetchone()
+    if not s:
+        c.close(); return {"error": "not found"}
+    count = c.execute("SELECT COUNT(*) FROM ambient_chunks WHERE session_id=?", (session_id,)).fetchone()[0]
+    c.close()
+    return {"id": s[0], "label": s[1], "status": s[2],
+            "started_at": s[3], "stopped_at": s[4], "chunks": count}
+
+
+@app.get("/api/ambient/sessions")
+def ambient_sessions(limit: int = 20):
+    c = db()
+    rows = c.execute(
+        "SELECT id,date,label,status,started_at,stopped_at FROM ambient_sessions ORDER BY id DESC LIMIT ?",
+        (limit,)
+    ).fetchall()
+    c.close()
+    return [{"id": r[0], "date": r[1], "label": r[2], "status": r[3],
+             "started_at": r[4], "stopped_at": r[5]} for r in rows]
+
+
 @app.post("/api/meeting-notes")
 async def generate_meeting_notes(req: dict):
     """Generate meeting notes from transcript using Claude."""
