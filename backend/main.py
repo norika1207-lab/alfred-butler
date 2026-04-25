@@ -1110,6 +1110,88 @@ async def chat(req: ChatReq):
                             url = search_service.youtube_search_url(query) if search_service else f"https://www.youtube.com/results?search_query={query}"
                             action = {"type": "open_url", "url": url, "title": f"YouTube：{query}"}
                             res = f"為您在 YouTube 搜尋「{query}」"
+                elif b.name == "help_quote":
+                    qmode = inp.get("mode", "analyze_history")
+                    brief = (inp.get("case_brief") or "").strip()
+                    duration = (inp.get("duration") or "").strip()
+                    client_name = (inp.get("client_name") or "").strip()
+
+                    # 撈過去報價單：上傳檔案 + Mac 索引（檔名/描述含 報價/quote/quotation）
+                    c2 = db()
+                    past = []
+                    rows = c2.execute(
+                        "SELECT id, original_name, mime_type, ts FROM files "
+                        "WHERE (original_name LIKE '%報價%' OR original_name LIKE '%quote%' OR original_name LIKE '%quotation%' "
+                        "    OR description LIKE '%報價%' OR tags LIKE '%報價%') "
+                        "AND (original_name LIKE '%.pdf' OR original_name LIKE '%.docx' OR original_name LIKE '%.txt' OR original_name LIKE '%.md') "
+                        "ORDER BY ts DESC LIMIT 6"
+                    ).fetchall()
+                    c2.close()
+                    for fid, fname, mime, ts in rows:
+                        c3 = db()
+                        rr = c3.execute("SELECT filename FROM files WHERE id=?", (fid,)).fetchone()
+                        c3.close()
+                        if rr:
+                            t = _extract_text_from_file(f"{FILE_DIR}/{rr[0]}", mime or "", fname or "")
+                            if t and not t.startswith("["):
+                                past.append((fname, ts[:10], t[:6000]))
+
+                    if not past:
+                        res = ("阿福暫時找不到任何過去的報價單檔案。"
+                               "主人方便先上傳幾份過去的報價單嗎？或告訴我您過去通常怎麼報價（例如：每月顧問費、按專案模組、人天 × 倍率），"
+                               "我就能依新案幫您草擬。")
+                    else:
+                        joined = "\n\n".join(f"=== 第 {i+1} 份《{n}》（{d}） ===\n{txt}" for i,(n,d,txt) in enumerate(past))
+                        if qmode == "analyze_history" or not brief:
+                            prompt = f"""主人請你分析他公司過去的報價邏輯。閱讀以下 {len(past)} 份過去報價單，
+歸納出主人公司的報價模式。輸出繁中 Markdown，欄位：
+
+## 一、公司主要服務範圍
+（從報價內容反推）
+
+## 二、報價邏輯（最重要）
+- 計價方式：人月 / 人天 / 模組固定價 / 工時×倍率？
+- 慣用單價區間（新台幣）
+- 是否含倍率、保證金、預算上限？
+- 付款條件（簽約金、期中款、尾款比例）
+- 標準附帶條件（修改次數、加價條件、延期罰則）
+
+## 三、推測這次案子的合適報價
+{('案子描述：' + brief if brief else '主人尚未提供案子細節 — 請列出三種典型案型 (小/中/大) 各自的合理報價區間，並提示主人補哪些資訊可以更精準')}
+{('預期工期：' + duration if duration else '')}
+
+最後**用主人的口吻**寫一句話：『主人，過去公司報價給客戶的方式都是…，因此這個案子大概會是…』
+
+過去報價單：
+{joined}"""
+                            ar = client.messages.create(model="claude-sonnet-4-6", max_tokens=2500,
+                                                        messages=[{"role":"user","content":prompt}])
+                            report = "".join(x.text for x in ar.content if hasattr(x,"text"))
+                            card = {"title": "報價邏輯分析" + (f"｜{client_name}" if client_name else ""),
+                                    "content": report, "type": "recommendation"}
+                            res = f"已分析 {len(past)} 份過去報價單，邏輯卡片已準備好。" + ("" if brief else "如要直接草擬報價單，請主人補一下案子細節（內容、預期工期）。")
+                        else:
+                            # draft 模式
+                            prompt = f"""主人公司過去報價單如下，請推斷其報價邏輯，然後依以下新案資訊**直接產出一份完整報價單草稿**（繁中 Markdown）。
+
+新案：
+- 客戶：{client_name or '（待補）'}
+- 描述：{brief}
+- 預期工期：{duration or '（待主人確認）'}
+
+報價單需含：抬頭(我方公司／日期／報價單號)、客戶資料、服務項目明細表(項目/數量/單價/小計)、總計、稅金說明、付款條件、有效期、補充條款、簽署欄。
+
+頂端附三句話：『主人，根據您過去的報價邏輯（XX），這份報價建議總價 NT$XXX，依據是 XXX。如要更精準請補 XXX。』
+
+過去報價單：
+{joined}"""
+                            ar = client.messages.create(model="claude-sonnet-4-6", max_tokens=3000,
+                                                        messages=[{"role":"user","content":prompt}])
+                            report = "".join(x.text for x in ar.content if hasattr(x,"text"))
+                            card = {"title": f"報價單草稿｜{client_name or brief[:18]}",
+                                    "content": report, "type": "document"}
+                            res = "報價單草稿已準備好，主人看完若要我寄出或調整再告訴我。"
+
                 elif b.name == "analyze_contract":
                     mode = inp.get("mode", "request_upload")
                     hint = (inp.get("hint") or "").strip()
