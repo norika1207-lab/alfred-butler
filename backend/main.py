@@ -3895,6 +3895,161 @@ async def upload_file(file: UploadFile = File(...),
     return {"id": file_id, "name": file.filename, "size": len(content), "ok": True}
 
 
+@app.post("/api/files/smart-search")
+async def smart_search(request: Request):
+    """
+    語意智慧搜尋引擎。
+    輸入：主人說的任何話（模糊、不完整都可以）
+    輸出：跨所有來源的最相關結果 + AI 解釋為何這些最符合
+    """
+    data = await request.json()
+    query = data.get("query", "").strip()
+    if not query:
+        return {"results": [], "explanation": ""}
+
+    c = db()
+
+    # ── Step 1：AI 解析查詢意圖 ─────────────────────────────────────────
+    parse_prompt = f"""主人說：「{query}」
+他在找什麼？用 JSON 分析：
+{{
+  "type": "檔案|照片|合約|報價單|提案|設計稿|食譜|餐廳|產品|其他",
+  "keywords": ["關鍵字1","關鍵字2"],
+  "people": ["相關人名"],
+  "time_hint": "最近|上週|去年|不明",
+  "project": "專案名稱（若有）",
+  "content_clue": "可能出現在文件裡的字句"
+}}"""
+    parse_resp = _simple_chat(parse_prompt, max_tokens=200)
+    import re as _re
+    jm = _re.search(r'\{.*\}', parse_resp, _re.DOTALL)
+    intent = {}
+    if jm:
+        try: intent = json.loads(jm.group())
+        except: pass
+
+    keywords = intent.get('keywords', []) + [query]
+    people   = intent.get('people', [])
+    project  = intent.get('project', '')
+    content_clue = intent.get('content_clue', '')
+
+    # ── Step 2：多來源並行搜尋 ──────────────────────────────────────────
+    results = []
+
+    # 2a. 上傳檔案 — 全文 + AI 標籤 + 視覺描述
+    for kw in keywords[:3]:
+        like = f"%{kw}%"
+        rows = c.execute(
+            """SELECT id, original_name, ai_summary, ai_tags, people, visual_desc,
+                      project, ts, mime_type
+               FROM files
+               WHERE original_name LIKE ? OR ai_summary LIKE ? OR ai_tags LIKE ?
+                  OR content_text LIKE ? OR visual_desc LIKE ? OR people LIKE ?
+                  OR description LIKE ? OR project LIKE ?
+               ORDER BY ts DESC LIMIT 5""",
+            (like,like,like,like,like,like,like,like)
+        ).fetchall()
+        for r in rows:
+            results.append({
+                "source": "upload",
+                "id": r[0],
+                "name": r[1],
+                "summary": r[2] or "",
+                "tags": r[3] or "",
+                "people": r[4] or "",
+                "visual": r[5] or "",
+                "project": r[6] or "",
+                "ts": r[7] or "",
+                "mime": r[8] or "",
+            })
+
+    # 2b. 人名搜尋
+    for person in people[:2]:
+        like = f"%{person}%"
+        rows = c.execute(
+            "SELECT id,original_name,ai_summary,people,ts FROM files WHERE people LIKE ? LIMIT 3",
+            (like,)
+        ).fetchall()
+        for r in rows:
+            results.append({"source":"upload","id":r[0],"name":r[1],"summary":r[2] or "","people":r[3] or "","ts":r[4] or ""})
+
+    # 2c. Mac 本機檔案
+    for kw in keywords[:2]:
+        like = f"%{kw}%"
+        mac_rows = c.execute(
+            "SELECT name,kind,size,modified FROM mac_files_index WHERE name LIKE ? LIMIT 5",
+            (like,)
+        ).fetchall()
+        for r in mac_rows:
+            results.append({"source":"mac","name":r[0],"kind":r[1],"size":r[2],"ts":r[3] or ""})
+
+    # 2d. Google Drive
+    if drive_service:
+        for kw in keywords[:2]:
+            drive_files, _ = drive_service.search_files(db, query=kw, limit=5)
+            for f in drive_files:
+                results.append({"source":"drive","name":f['name'],"type":f['type'],"ts":f['modified']})
+
+    # 2e. 會議記錄 / 辦公室聆聽
+    for kw in keywords[:2]:
+        like = f"%{kw}%"
+        meeting_rows = c.execute(
+            "SELECT id,title,summary,ts FROM meeting_notes WHERE title LIKE ? OR summary LIKE ? ORDER BY ts DESC LIMIT 3",
+            (like,like)
+        ).fetchall()
+        for r in meeting_rows:
+            results.append({"source":"meeting","id":r[0],"name":r[1],"summary":r[2] or "","ts":r[3] or ""})
+
+    # 2f. 記憶（主人曾說過的事）
+    for kw in keywords[:2]:
+        like = f"%{kw}%"
+        mem_rows = c.execute(
+            "SELECT category,key,value,ts FROM memories WHERE value LIKE ? ORDER BY ts DESC LIMIT 5",
+            (like,)
+        ).fetchall()
+        for r in mem_rows:
+            results.append({"source":"memory","category":r[0],"key":r[1],"value":r[2],"ts":r[3] or ""})
+
+    c.close()
+
+    # 去重
+    seen_names = set()
+    unique = []
+    for r in results:
+        key = r.get('name','') + r.get('source','')
+        if key not in seen_names:
+            seen_names.add(key)
+            unique.append(r)
+
+    # ── Step 3：AI 排名 + 解釋 ──────────────────────────────────────────
+    if not unique:
+        explanation = f"主人，我在所有地方都找不到符合「{query}」的內容。您記得是什麼時候存的，或是誰相關的嗎？"
+        return {"results": [], "explanation": explanation, "intent": intent}
+
+    # 讓 AI 選出最相關的
+    candidates = json.dumps(unique[:20], ensure_ascii=False, default=str)
+    rank_prompt = f"""主人在找：「{query}」
+意圖分析：{json.dumps(intent, ensure_ascii=False)}
+
+以下是找到的候選結果（JSON）：
+{candidates}
+
+請選出最可能是主人要找的 1-3 個，說明為什麼，用阿福的語氣說（繁體中文，自然口語）。
+格式：
+BEST: [結果的 name/title]
+REASON: 阿福解釋（一兩句話）"""
+
+    rank_resp = _simple_chat(rank_prompt, max_tokens=300)
+    explanation = rank_resp
+
+    return {
+        "results": unique[:10],
+        "explanation": explanation,
+        "intent": intent,
+        "total_found": len(unique)
+    }
+
+
 @app.get("/api/files")
 def list_files_api(q: str = "", limit: int = 30):
     """List uploaded local files."""
