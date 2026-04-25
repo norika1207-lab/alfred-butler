@@ -2477,20 +2477,19 @@ async def greet():
 
                     suggestions = []
                     if drinks:
-                        suggestions.append(f"{person} 喜歡喝{drinks[0]}")
+                        suggestions.append(f"愛喝{drinks[0]}")
                     if foods:
                         suggestions.append(f"愛吃{foods[0]}")
                     if gifts:
-                        suggestions.append(f"送禮方向：{gifts[0]}")
+                        suggestions.append(f"送禮可以考慮{gifts[0]}")
 
                     if suggestions:
                         time_str = f"{ev_time} " if ev_time else ""
                         sugg_str = "，".join(suggestions)
-                        taboo_str = f"（注意：避開{taboos[0]}）" if taboos else ""
+                        taboo_str = f"，記得避開{taboos[0]}" if taboos else ""
                         visit_hint = (
-                            f"今天{time_str}有「{ev_title}」。阿福查了一下，"
-                            f"{sugg_str}{taboo_str}。"
-                            f"出門前要不要順路帶點東西？小小的心意，對方會記得的。"
+                            f"今天{time_str}有「{ev_title}」，{person}{sugg_str}{taboo_str}。"
+                            f"出門前要不要順路帶點東西？小心意，對方會記得的。"
                         )
                     break
             if visit_hint:
