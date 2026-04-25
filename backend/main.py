@@ -2634,8 +2634,16 @@ async def _run_alfred_for_messaging(text: str) -> str:
             results.append({"type": "tool_result", "tool_use_id": b.id, "content": res})
 
         c.commit(); c.close()
-        messages.append({"role": "assistant", "content": resp.content})
-        messages.append({"role": "user", "content": results})
+        if LLM_PROVIDER == "gemini":
+            messages.append({"role": "assistant", "content": _t or None,
+                             "tool_calls": [{"id": r["tool_call_id"],"type":"function",
+                                             "function":{"name":r["name"],"arguments":"{}"}} for r in results]})
+            for r in results:
+                messages.append({"role":"tool","tool_call_id":r["tool_call_id"],"content":r["result"]})
+        else:
+            messages.append({"role": "assistant", "content": _raw})
+            messages.append({"role": "user", "content": [
+                {"type":"tool_result","tool_use_id":r["tool_call_id"],"content":r["result"]} for r in results]})
 
     return full_text or "收到，主人。"
 
