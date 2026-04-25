@@ -2101,7 +2101,7 @@ async def greet():
         if todos_followup:
             parts.append(f"「{todos_followup[0]}」這件事，還沒處理。")
         if old_promise and not todos_followup:
-            parts.append(f"另外，您之前答應{old_promise[0]}要{old_promise[1]}，還沒跟進。")
+            parts.append(f"還有，您之前答應{old_promise[0]}要{old_promise[1]}，還沒跟進。")
         if pet_supply_warn:
             parts.append(pet_supply_warn)
 
