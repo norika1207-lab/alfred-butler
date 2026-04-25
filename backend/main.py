@@ -1207,6 +1207,32 @@ async def chat(req: ChatReq):
                             url = search_service.youtube_search_url(query) if search_service else f"https://www.youtube.com/results?search_query={query}"
                             action = {"type": "open_url", "url": url, "title": f"YouTube：{query}"}
                             res = f"為您在 YouTube 搜尋「{query}」"
+                elif b.name == "acknowledge_alert":
+                    aid = inp.get("alert_id")
+                    if aid:
+                        c.execute("UPDATE family_alerts SET acknowledged_at=? WHERE id=?",
+                                  (datetime.now().isoformat(), aid))
+                        res = f"警報 #{aid} 已確認。"
+                    else:
+                        # 確認所有未讀警報
+                        c.execute("UPDATE family_alerts SET acknowledged_at=? WHERE acknowledged_at IS NULL",
+                                  (datetime.now().isoformat(),))
+                        res = "所有警報已確認。"
+                elif b.name == "family_plan":
+                    mname = inp.get("member_name", "")
+                    dest = inp.get("destination", "")
+                    eta = inp.get("eta", "")
+                    row = c.execute(
+                        "SELECT id FROM family_members WHERE name LIKE ? LIMIT 1", (f"%{mname}%",)
+                    ).fetchone()
+                    if row:
+                        c.execute(
+                            "UPDATE family_members SET planned_destination=?, planned_eta=? WHERE id=?",
+                            (dest, eta, row[0])
+                        )
+                        res = f"已記下 {mname} 說要去「{dest}」{('，預計' + eta + '回來') if eta else ''}。如果 GPS 位置與申報不符，阿福會立刻通知您。"
+                    else:
+                        res = f"找不到「{mname}」在家庭成員名單中。"
                 elif b.name == "family_location":
                     fl_action = inp.get("action", "all")
                     c2 = db()
