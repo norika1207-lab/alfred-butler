@@ -233,11 +233,46 @@ TWILIO_CONFIGURED = bool(
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-DB = "/opt/alfred/data/alfred.db"
+DB = "/opt/alfred/data/alfred.db"   # 單人模式 fallback
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 
-def db():
+# 目前 request 的 user_id（由 middleware 設定）
+_current_user_id: Optional[str] = None
+
+def db(user_id: Optional[str] = None):
+    """
+    多用戶模式：回傳該用戶的獨立 SQLite。
+    未登入時 fallback 到舊的單人 DB（向後相容）。
+    """
+    uid = user_id or _current_user_id
+    if uid:
+        path = user_db_path(uid)
+        conn = sqlite3.connect(path)
+        # 首次建立時初始化 schema
+        if not _user_db_initialized(path):
+            _init_user_db(conn)
+        return conn
     return sqlite3.connect(DB)
+
+_initialized_dbs: set = set()
+
+def _user_db_initialized(path: str) -> bool:
+    if path in _initialized_dbs:
+        return True
+    return os.path.exists(path) and os.path.getsize(path) > 0
+
+def _init_user_db(conn):
+    """在新用戶的 DB 上建立完整 schema。"""
+    existing_schema = sqlite3.connect(DB)
+    schema = existing_schema.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND sql IS NOT NULL"
+    ).fetchall()
+    existing_schema.close()
+    for (sql,) in schema:
+        try: conn.execute(sql)
+        except Exception: pass
+    conn.commit()
+    _initialized_dbs.add(conn.database if hasattr(conn, 'database') else '')
 
 
 # ─── Background indexing ───────────────────────────────────────────────────────
