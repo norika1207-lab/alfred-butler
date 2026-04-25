@@ -734,6 +734,14 @@ async def chat(req: ChatReq):
 - 主人說「你盯著XX」「記得追XX」→ create_todo + follow_up=true
 - 主人說今天要做哪些事 → 先 create_todo，然後問「需要我幫您排好時間嗎？」
 - 主人告知城市 → save_memory category=location key=city
+- 主人說「我跟XX說…」「我答應XX要…」「我說要幫XX…」→ 用 note_promise 記錄承諾
+- 主人說「有沒有什麼我沒跟進的」「我答應過什麼」→ 用 note_promise action=list
+- 主人說「那件事我做了」「XX那邊已經處理了」→ 用 note_promise action=done
+- 主人說「我有一隻貓/狗叫…」「幫我記一下寵物的事」→ 用 pet_care
+- 主人說「貓糧快沒了」「幫我記一下買了貓砂」→ 用 pet_care action=log_supply
+- 主人說「上次跟XX公司會議說了什麼」「找一下那次的紀錄」→ 用 search_meeting_notes
+- 主人說「太太生日是X月X日」「記一下結婚紀念日」→ 用 manage_anniversary action=add
+- 主人說「有什麼紀念日要到了嗎」→ 用 manage_anniversary action=list
 - 主人說「幫我排會議」「看看什麼時候方便」→ 用 find_meeting_slots，然後自然說出：「主人，您習慣下午兩點開會，這週週二和週四下午兩點都有空，要排哪天？」
 - 排會議時間若在 11:30-13:30 之間 → 排完後主動問：「這是午餐時段，需要我幫您順便訂餐嗎？幾個人？」
 - 主人確認要訂餐 → 用 search_restaurants 找選項，說出：「有幾家選擇：中式的XX、日式的YY、西式的ZZ，我幫您電話確認有沒有位置，要從哪家開始？」
