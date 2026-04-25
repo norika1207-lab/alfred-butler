@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>認識阿福</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;background:#080604;font-family:-apple-system,'PingFang TC',sans-serif;
+  color:#e8d5b7;overflow:hidden;}
+
+/* ── 開場畫面 ── */
+#stage{
+  position:fixed;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  background:radial-gradient(ellipse at 50% 40%, #1a1208 0%, #080604 70%);
+}
+
+/* 管家圖像 */
+.butler-wrap{position:relative;margin-bottom:32px;}
+.butler-ring{
+  position:absolute;border-radius:50%;border:1px solid rgba(201,168,76,0.15);
+  top:50%;left:50%;transform:translate(-50%,-50%);
+  animation:ring-pulse 3s ease-in-out infinite;
+}
+.r1{width:120px;height:120px;animation-delay:0s;}
+.r2{width:160px;height:160px;animation-delay:0.6s;}
+.r3{width:200px;height:200px;animation-delay:1.2s;}
+@keyframes ring-pulse{0%,100%{opacity:0.15;transform:translate(-50%,-50%) scale(1);}
+  50%{opacity:0.35;transform:translate(-50%,-50%) scale(1.03);}}
+.butler-avatar{
+  width:80px;height:80px;background:rgba(201,168,76,0.1);
+  border:2px solid rgba(201,168,76,0.4);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:40px;position:relative;z-index:1;}
+
+/* 文字區 */
+#monologue{text-align:center;max-width:320px;padding:0 24px;}
+#alfred-name{
+  font-size:11px;letter-spacing:4px;color:rgba(201,168,76,0.6);
+  margin-bottom:20px;text-transform:uppercase;}
+#speech{
+  font-size:18px;line-height:1.8;color:#e8d5b7;
+  min-height:120px;
+}
+#speech-cursor{
+  display:inline-block;width:2px;height:1.1em;
+  background:#c9a84c;margin-left:2px;vertical-align:text-bottom;
+  animation:blink 0.9s step-end infinite;
+}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:0;}}
+
+/* CTA */
+#cta{margin-top:36px;display:none;flex-direction:column;align-items:center;gap:12px;}
+#cta.show{display:flex;}
+.cta-btn{
+  padding:14px 40px;border-radius:28px;
+  border:1px solid rgba(201,168,76,0.6);
+  background:rgba(201,168,76,0.1);
+  color:#c9a84c;font-size:16px;font-weight:600;cursor:pointer;
+  letter-spacing:1px;transition:background 0.2s;}
+.cta-btn:active{background:rgba(201,168,76,0.2);}
+.skip-btn{
+  font-size:12px;color:rgba(232,213,183,0.3);
+  background:none;border:none;cursor:pointer;padding:8px;}
+
+/* ── 問答流程 ── */
+#onboard-flow{
+  position:fixed;inset:0;display:none;flex-direction:column;
+  background:#080604;padding:0;}
+#onboard-flow.show{display:flex;}
+
+.ob-header{
+  padding:20px 20px 0;flex-shrink:0;
+  display:flex;align-items:center;gap:12px;}
+.ob-avatar{
+  width:44px;height:44px;border-radius:50%;
+  background:rgba(201,168,76,0.1);border:1px solid rgba(201,168,76,0.3);
+  display:flex;align-items:center;justify-content:center;font-size:22px;}
+.ob-name{font-size:13px;color:rgba(201,168,76,0.8);letter-spacing:2px;}
+
+.ob-body{flex:1;padding:24px 20px;display:flex;flex-direction:column;justify-content:center;}
+.ob-question{font-size:20px;line-height:1.7;margin-bottom:28px;color:#e8d5b7;}
+.ob-sub{font-size:13px;color:rgba(232,213,183,0.4);margin-top:-18px;margin-bottom:28px;}
+
+/* 城市選擇 */
+.city-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+.city-btn{
+  padding:14px 10px;border-radius:12px;
+  border:1px solid rgba(255,255,255,0.1);
+  background:rgba(255,255,255,0.04);
+  color:#e8d5b7;font-size:15px;cursor:pointer;text-align:center;
+  transition:all 0.15s;}
+.city-btn.selected{border-color:rgba(201,168,76,0.7);background:rgba(201,168,76,0.12);color:#c9a84c;}
+.city-input{
+  width:100%;padding:14px 16px;border-radius:12px;
+  border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.06);
+  color:#e8d5b7;font-size:15px;outline:none;margin-bottom:10px;}
+.city-input:focus{border-color:rgba(201,168,76,0.5);}
+.city-input::placeholder{color:rgba(232,213,183,0.3);}
+
+/* 進度 */
+.ob-progress{display:flex;gap:6px;justify-content:center;margin-bottom:28px;}
+.ob-dot{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,0.15);}
+.ob-dot.done{background:rgba(201,168,76,0.7);}
+.ob-dot.active{background:#c9a84c;}
+
+.ob-next{
+  width:100%;padding:15px;border-radius:14px;border:none;
+  background:rgba(201,168,76,0.85);color:#120e08;
+  font-size:16px;font-weight:700;cursor:pointer;margin-top:16px;}
+.ob-next:disabled{opacity:0.4;cursor:not-allowed;}
+.ob-skip{
+  width:100%;padding:12px;border-radius:14px;border:1px solid rgba(255,255,255,0.08);
+  background:transparent;color:rgba(232,213,183,0.4);font-size:14px;cursor:pointer;margin-top:8px;}
+
+/* ── 完成畫面 ── */
+#done-screen{
+  position:fixed;inset:0;display:none;flex-direction:column;
+  align-items:center;justify-content:center;text-align:center;
+  background:#080604;padding:32px;}
+#done-screen.show{display:flex;}
+.done-icon{font-size:56px;margin-bottom:16px;}
+.done-title{font-size:22px;font-weight:700;margin-bottom:12px;}
+.done-sub{font-size:14px;color:rgba(232,213,183,0.5);line-height:1.8;margin-bottom:36px;}
+.done-start{
+  padding:16px 48px;border-radius:28px;border:none;
+  background:rgba(201,168,76,0.85);color:#120e08;
+  font-size:17px;font-weight:700;cursor:pointer;}
+</style>
+</head>
+<body>
+
+<!-- 開場 -->
+<div id="stage">
+  <div class="butler-wrap">
+    <div class="butler-ring r1"></div>
+    <div class="butler-ring r2"></div>
+    <div class="butler-ring r3"></div>
+    <div class="butler-avatar">🎩</div>
+  </div>
+  <div id="monologue">
+    <div id="alfred-name">A L F R E D</div>
+    <div id="speech"><span id="speech-text"></span><span id="speech-cursor"></span></div>
+  </div>
+  <div id="cta">
+    <button class="cta-btn" onclick="startOnboard()">開始吧</button>
+    <button class="skip-btn" onclick="skipToApp()">我已經認識阿福，直接進入</button>
+  </div>
+</div>
+
+<!-- 問答流程 -->
+<div id="onboard-flow">
+  <div class="ob-header">
+    <div class="ob-avatar">🎩</div>
+    <div class="ob-name">ALFRED</div>
+  </div>
+  <div class="ob-body" id="ob-body">
+    <!-- filled by JS -->
+  </div>
+</div>
+
+<!-- 完成 -->
+<div id="done-screen">
+  <div class="done-icon">🎩</div>
+  <div class="done-title">阿福準備好了</div>
+  <div class="done-sub" id="done-text">從今天起，這裡是您的私人管家台。<br>有事就說，阿福在。</div>
+  <button class="done-start" onclick="enterApp()">進入</button>
+</div>
+
+<script>
+const API = '/api';
+
+// ── 開場獨白（逐字打出）─────────────────────────────────────────────────────
+const MONOLOGUE = `過去，能擁有一位私人管家，是極少數人才有的待遇。
+
+從今天起，阿福只為您一個人服務。
+
+不需要學習任何操作。只要像跟人說話一樣就好。`;
+
+let charIdx = 0;
+let monologueDone = false;
+
+function typeMonologue() {
+  const el = document.getElementById('speech-text');
+  if (charIdx < MONOLOGUE.length) {
+    el.textContent += MONOLOGUE[charIdx];
+    charIdx++;
+    // 標點後停頓長一點
+    const c = MONOLOGUE[charIdx - 1];
+    const delay = (c === '。' || c === '\n\n') ? 600 : 40;
+    setTimeout(typeMonologue, delay);
+  } else {
+    monologueDone = true;
+    document.getElementById('speech-cursor').style.display = 'none';
+    setTimeout(() => document.getElementById('cta').classList.add('show'), 800);
+  }
+}
+
+// 點擊加速
+document.getElementById('stage').addEventListener('click', () => {
+  if (!monologueDone) {
+    document.getElementById('speech-text').textContent = MONOLOGUE;
+    charIdx = MONOLOGUE.length;
+    monologueDone = true;
+    document.getElementById('speech-cursor').style.display = 'none';
+    document.getElementById('cta').classList.add('show');
+  }
+});
+
+setTimeout(typeMonologue, 800);
+
+// ── 問答步驟 ────────────────────────────────────────────────────────────────
+let step = 0;
+let answers = { city: '', city_display: '', name_pref: '', wake_hour: 7 };
+
+const STEPS = [
+  {
+    id: 'city',
+    question: '請問您住在哪個城市？\n這樣阿福才能幫您掌握每天的天氣。',
+    render: renderCity,
+    validate: () => answers.city.trim().length > 0
+  },
+  {
+    id: 'name',
+    question: '阿福稱呼您「主人」，\n您希望阿福怎麼稱呼您？',
+    sub: '（可以直接說「就叫主人就好」，或告訴我您的名字）',
+    render: renderName,
+    validate: () => true  // optional
+  },
+  {
+    id: 'wake',
+    question: '您平常幾點起床？\n阿福會在那個時間為您整理一天的提醒。',
+    render: renderWake,
+    validate: () => true
+  }
+];
+
+function startOnboard() {
+  document.getElementById('stage').style.display = 'none';
+  document.getElementById('onboard-flow').classList.add('show');
+  renderStep();
+}
+
+function skipToApp() {
+  window.location.href = '/alfred/';
+}
+
+function renderStep() {
+  const s = STEPS[step];
+  const body = document.getElementById('ob-body');
+
+  // Progress dots
+  const dots = STEPS.map((_, i) => {
+    const cls = i < step ? 'done' : i === step ? 'active' : '';
+    return `<div class="ob-dot ${cls}"></div>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div class="ob-progress">${dots}</div>
+    <div class="ob-question">${s.question.replace(/\n/g,'<br>')}</div>
+    ${s.sub ? `<div class="ob-sub">${s.sub}</div>` : ''}
+    <div id="ob-input-area"></div>
+    <button class="ob-next" id="ob-next" onclick="nextStep()">${step < STEPS.length-1 ? '下一步' : '完成設定'}</button>
+    ${step > 0 ? '<button class="ob-skip" onclick="skipStep()">略過這步</button>' : ''}
+  `;
+  s.render();
+  validateNext();
+}
+
+function validateNext() {
+  const s = STEPS[step];
+  document.getElementById('ob-next').disabled = !s.validate();
+}
+
+function renderCity() {
+  const cities = ['台北','台中','台南','高雄','新竹','桃園','基隆','花蓮'];
+  const area = document.getElementById('ob-input-area');
+  area.innerHTML = `
+    <div class="city-grid">
+      ${cities.map(c => `<button class="city-btn" onclick="selectCity('${c}')">${c}</button>`).join('')}
+    </div>
+    <input class="city-input" id="city-custom" placeholder="其他城市…" oninput="customCity(this.value)">
+  `;
+}
+
+function selectCity(c) {
+  answers.city = c === '台北' ? 'Taipei' : c === '台中' ? 'Taichung' :
+    c === '台南' ? 'Tainan' : c === '高雄' ? 'Kaohsiung' :
+    c === '新竹' ? 'Hsinchu' : c === '桃園' ? 'Taoyuan' :
+    c === '基隆' ? 'Keelung' : c === '花蓮' ? 'Hualien' : c;
+  answers.city_display = c;
+  document.querySelectorAll('.city-btn').forEach(b => {
+    b.classList.toggle('selected', b.textContent === c);
+  });
+  document.getElementById('city-custom').value = '';
+  validateNext();
+}
+
+function customCity(v) {
+  answers.city = v; answers.city_display = v;
+  document.querySelectorAll('.city-btn').forEach(b => b.classList.remove('selected'));
+  validateNext();
+}
+
+function renderName() {
+  const area = document.getElementById('ob-input-area');
+  area.innerHTML = `
+    <div class="city-grid">
+      <button class="city-btn selected" onclick="selectName('就叫主人就好')">就叫主人就好</button>
+      <button class="city-btn" onclick="nameInput()">告訴我名字</button>
+    </div>
+    <input class="city-input" id="name-custom" placeholder="您的名字…" style="display:none" oninput="customName(this.value)">
+  `;
+  answers.name_pref = '主人';
+}
+
+function selectName(v) {
+  answers.name_pref = v === '就叫主人就好' ? '主人' : '';
+  document.querySelectorAll('.city-btn').forEach(b => b.classList.remove('selected'));
+  event.target.classList.add('selected');
+  document.getElementById('name-custom').style.display = 'none';
+}
+
+function nameInput() {
+  document.querySelectorAll('.city-btn').forEach(b => b.classList.remove('selected'));
+  event.target.classList.add('selected');
+  const inp = document.getElementById('name-custom');
+  inp.style.display = 'block';
+  inp.focus();
+}
+function customName(v) { answers.name_pref = v; }
+
+function renderWake() {
+  const area = document.getElementById('ob-input-area');
+  const hours = [5,6,7,8,9,10];
+  area.innerHTML = `
+    <div class="city-grid">
+      ${hours.map(h => `<button class="city-btn${h===7?' selected':''}" onclick="selectWake(${h})">${h}:00</button>`).join('')}
+    </div>
+  `;
+  answers.wake_hour = 7;
+}
+
+function selectWake(h) {
+  answers.wake_hour = h;
+  document.querySelectorAll('.city-btn').forEach(b => b.classList.remove('selected'));
+  event.target.classList.add('selected');
+}
+
+async function nextStep() {
+  if (step < STEPS.length - 1) {
+    step++;
+    renderStep();
+  } else {
+    await saveAndFinish();
+  }
+}
+
+function skipStep() {
+  if (step < STEPS.length - 1) {
+    step++;
+    renderStep();
+  } else {
+    saveAndFinish();
+  }
+}
+
+async function saveAndFinish() {
+  await fetch(API + '/onboard/save', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(answers)
+  });
+  localStorage.setItem('alfred_onboarded', '1');
+  document.getElementById('onboard-flow').classList.remove('show');
+  const nameHint = answers.name_pref && answers.name_pref !== '主人' ? answers.name_pref + '主人' : '主人';
+  document.getElementById('done-text').innerHTML =
+    `${nameHint}，阿福準備好了。<br>有事就說，阿福在。<br><br>` +
+    `<span style="font-size:12px;color:rgba(232,213,183,0.4)">試試說：「阿福，今天有什麼行程？」</span>`;
+  document.getElementById('done-screen').classList.add('show');
+}
+
+function enterApp() {
+  window.location.href = '/alfred/';
+}
+
+// 已完成 onboarding 就直接跳過
+if (localStorage.getItem('alfred_onboarded') === '1') {
+  window.location.href = '/alfred/';
+}
+</script>
+</body>
+</html>
