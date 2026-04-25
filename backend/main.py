@@ -2715,12 +2715,9 @@ async def tts(req: TTSReq):
     # 截斷（TTS 最多 2500 字元）
     text = text[:2500]
 
-    # Alfred 阿福：Michael Caine 克隆聲音
-    VOICE_ID = "YWnZZfEtTni5X2rz4DEg"
-
     async with httpx.AsyncClient(timeout=60) as c:
         resp = await c.post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}",
+            f"https://api.elevenlabs.io/v1/text-to-speech/{selected_voice}",
             headers={"xi-api-key": el_key, "Content-Type": "application/json"},
             json={
                 "text": text,
