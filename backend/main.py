@@ -2328,6 +2328,78 @@ def recent_places(limit: int = 20):
              "arrived_at":r[4],"duration_min":r[5]} for r in rows]
 
 
+@app.get("/api/location/context")
+async def location_context():
+    """
+    依最新 GPS 判斷主人現在在哪裡（home/office/gym/other/unknown），
+    並給出阿福的主動問候文字，前端 GPS 抵達已知地點時呼叫。
+    """
+    c = db()
+    latest = c.execute("SELECT lat,lng,ts FROM location_log ORDER BY id DESC LIMIT 1").fetchone()
+    if not latest:
+        c.close()
+        return {"context": "unknown", "name": "", "greeting": ""}
+
+    lat, lng, ts = latest
+    known = c.execute("SELECT name,place_type,lat,lng FROM known_places").fetchall()
+    context_type = "unknown"
+    context_name = ""
+    for kp_name, kp_type, kp_lat, kp_lng in known:
+        d = _haversine(lat, lng, kp_lat, kp_lng)
+        if d < 300:
+            context_type = kp_type
+            context_name = kp_name
+            break
+
+    # 確認今日是否已問候過（防重複）
+    today = datetime.now().strftime("%Y-%m-%d")
+    already = c.execute(
+        "SELECT COUNT(*) FROM memories WHERE category='context_greeted' AND key=? AND value LIKE ?",
+        (context_type, f"{today}%")
+    ).fetchone()[0]
+
+    greeting = ""
+    if not already and context_type != "unknown":
+        hour = datetime.now().hour
+        if context_type == "office" and 6 <= hour < 21:
+            # 取今日行程
+            events = c.execute(
+                "SELECT title,event_time FROM calendar_events WHERE event_date=? ORDER BY event_time LIMIT 2",
+                (today,)
+            ).fetchall()
+            todos = c.execute(
+                "SELECT title FROM todos WHERE status='pending' ORDER BY ts DESC LIMIT 2"
+            ).fetchall()
+            ev_str = "，".join(f"{e[1] or ''}「{e[0]}」" for e in events) if events else ""
+            todo_str = "、".join(t[0][:12] for t in todos) if todos else ""
+            greeting = f"主人，您開始了一天重要的工作。"
+            if ev_str:
+                greeting += f"今天行程：{ev_str}。"
+            if todo_str:
+                greeting += f"待辦還有：{todo_str}。"
+            greeting += "有需要我的話隨時說，我切換成辦公室模式為您服務。"
+        elif context_type == "home" and (hour >= 18 or hour < 8):
+            greeting = f"主人，您到家了，辛苦了一天。有需要我的地方隨時說，今晚好好休息。"
+        elif context_type == "gym":
+            greeting = f"主人，您到健身房了。記得暖身，我在旁邊待機。"
+
+        if greeting:
+            # 記錄已問候
+            c.execute(
+                "INSERT INTO memories (category,key,value,ts) VALUES (?,?,?,?)",
+                ("context_greeted", context_type, f"{today} {datetime.now().strftime('%H:%M')}", datetime.now().isoformat())
+            )
+            c.commit()
+
+    c.close()
+    return {
+        "context": context_type,
+        "name": context_name,
+        "lat": lat, "lng": lng,
+        "greeting": greeting
+    }
+
+
 @app.post("/api/items/save")
 async def save_item_location(request: Request):
     """Save where an item was placed."""
