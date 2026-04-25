@@ -856,22 +856,21 @@ async def chat(req: ChatReq):
     current = msgs.copy()
 
     while True:
-        resp = client.messages.create(
-            model="claude-sonnet-4-6", max_tokens=2048,
-            system=system, tools=TOOLS, messages=current
-        )
-        for b in resp.content:
-            if hasattr(b, 'text'):
-                full_text += b.text
+        _text, _tool_calls, _finish, _raw = _llm_chat(system, current, TOOLS, max_tokens=2048)
+        if _text:
+            full_text += _text
 
-        if resp.stop_reason == "end_turn":
+        if _finish == "end_turn":
             break
 
-        if resp.stop_reason == "tool_use":
+        if _finish == "tool_use":
             results = []
-            for b in resp.content:
-                if b.type != "tool_use":
-                    continue
+            for _tc in _tool_calls:
+                # 統一格式：b.name → _tc["name"], b.input → _tc["input"], b.id → _tc["id"]
+                class _B:
+                    def __init__(self, d):
+                        self.name = d["name"]; self.input = d["input"]; self.id = d["id"]
+                b = _B(_tc)
                 inp = b.input
                 res = "done"
                 c = db()
