@@ -612,6 +612,19 @@ TOOLS = [
          "platform": {"type": "string", "enum": ["youtube", "spotify", "recent"], "description": "youtube/spotify=搜尋平台, recent=查播放紀錄"}
      }, "required": ["query"]}},
 
+    {"name": "speak_for_me", "description":
+        "幫主人把中文翻譯成指定語言，並大聲念出來給對方聽。"
+        "主人說「跟店員說我要...」「幫我說日文...」「告訴他...」「跟司機說...」時使用。"
+        "也用於：對方說了什麼主人聽不懂 → 主人說「阿福，他在說什麼」→ 先用 transcribe 錄對方的話，再翻中文給主人聽。"
+        "target_lang: en=英文, ja=日文, ko=韓文, fr=法文, es=西班牙文, de=德文, th=泰文",
+     "input_schema": {"type": "object", "properties": {
+         "text": {"type": "string", "description": "要翻譯並念出的內容（主人說的中文）"},
+         "target_lang": {"type": "string", "enum": ["en","ja","ko","fr","es","de","th","vi","id"],
+                         "description": "目標語言代碼"},
+         "direction": {"type": "string", "enum": ["to_foreign","to_chinese"],
+                       "description": "to_foreign=幫主人說給外國人聽, to_chinese=把外語翻給主人聽"}
+     }, "required": ["text","target_lang"]}},
+
     {"name": "people_prefs", "description":
         "記錄或查詢同事、主管、老闆的個人偏好（食物、飲料、習慣、禁忌、重要日期）。"
         "主人說「老闆喜歡喝黑咖啡」「王主管不吃海鮮」「小美生日快到了」時用 add。"
