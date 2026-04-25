@@ -623,6 +623,26 @@ async def chat(req: ChatReq):
 
 繁體中文，稱呼「主人」，說話像在說話不像在打字，不說廢話。"""
 
+    # 記錄主人活躍心跳（用於警報升級判斷）
+    _record_owner_active()
+
+    # 檢查是否有待處理的家庭警報，插入 system 中告知 Alfred
+    c_alert = db()
+    pending_alerts = c_alert.execute(
+        "SELECT fa.id, fm.name, fa.message, fa.severity FROM family_alerts fa "
+        "JOIN family_members fm ON fa.member_id=fm.id "
+        "WHERE fa.acknowledged_at IS NULL ORDER BY fa.severity DESC, fa.created_at ASC LIMIT 3"
+    ).fetchall()
+    c_alert.close()
+    alert_injection = ""
+    if pending_alerts:
+        alert_lines = ["【緊急家庭警報，請優先處理，在回覆開頭主動提醒主人】"]
+        for aid, name, msg, sev in pending_alerts:
+            sev_tag = "🚨 緊急" if sev == "critical" else "⚠️ 注意"
+            alert_lines.append(f"{sev_tag} 警報#{aid}｜{msg}")
+        alert_lines.append("提醒完後問主人是否已了解，若主人說「收到」請呼叫 acknowledge_alert 工具確認。")
+        alert_injection = "\n\n" + "\n".join(alert_lines)
+
     msgs = list(req.history[-10:])
     msgs.append({"role": "user", "content": req.message})
     card = None
