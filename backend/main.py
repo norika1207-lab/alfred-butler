@@ -898,7 +898,8 @@ async def chat(req: ChatReq):
 - 主人說「X分鐘後提醒我」「X點提醒我」→ set_reminder，trigger_at 計算正確 ISO 時間
 - 主人說「你盯著XX」「記得追XX」→ create_todo + follow_up=true
 - 主人說今天要做哪些事 → 先 create_todo，然後問「需要我幫您排好時間嗎？」
-- 主人告知城市 → save_memory category=location key=city
+- 主人告知城市（包括回答阿福問的「您住在哪裡」）→ 立刻用 save_memory category=location key=city 記住，不再問第二次
+- 記住城市後說「謝謝主人，日後阿福會為您在台北（或其他城市）做最佳化安排。」
 - 主人說「老闆喜歡…」「王主管不吃…」「陳總的習慣是…」「客戶王董愛喝…」→ 用 people_prefs action=add 記錄
 - 主人說「老闆喜歡什麼」「要送禮給主管」「拜訪客戶前要注意什麼」「我要去見王董」→ 用 people_prefs action=query
 - 主人說「我要去拜訪 XX」「等等要去見 XX 客戶」→ 先 people_prefs query 查對方偏好，如有喜好則建議「順路帶 XX 飲料/點心，對方會記得這份心意」，再用 search_web 查主人附近的相關商店
