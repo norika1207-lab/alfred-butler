@@ -2761,6 +2761,7 @@ async def translate_tts(
     mode: str = Form("interpret")
 ):
     """翻譯 + 直接回傳 TTS 音頻（合併兩步為一）。"""
+    req = TranslateReq(text=text, target_lang=target_lang, source_lang=source_lang, mode=mode)
     result = await translate_text(req)
     translated = result.get("translated", "")
     if not translated:
