@@ -664,9 +664,27 @@ function gpsDecline() {
   typeWrite('好的，主人。之後需要的話，隨時說「讓阿福記錄位置」即可開啟。');
 }
 
+// 首次啟動 → 導向歡迎頁
+if (!localStorage.getItem('alfred_onboarded')) {
+  window.location.href = '/alfred/welcome.html';
+}
+
 // Opening greeting on first load
 (async()=>{
   try{
+    // 每次開啟主動檢查有沒有未用過的功能，偶爾提示（每7天一次）
+    const lastDiscover = parseInt(localStorage.getItem('last_discover') || '0');
+    if (Date.now() - lastDiscover > 7 * 86400000) {
+      fetch(API + '/discover').then(r => r.json()).then(d => {
+        if (d.suggestions && d.suggestions.length > 0 && d.tried_count > 0) {
+          const s = d.suggestions[0];
+          setTimeout(() => {
+            typeWrite(`主人，順帶一提，有個您還沒試過的功能：${s.trigger}`);
+            localStorage.setItem('last_discover', Date.now().toString());
+          }, 8000);
+        }
+      }).catch(()=>{});
+    }
     const r=await fetch(API+'/greet');
     const d=await r.json();
     if(d.text){
