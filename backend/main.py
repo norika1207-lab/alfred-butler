@@ -1258,7 +1258,10 @@ async def chat(req: ChatReq):
                                                                     messages=[{"role":"user","content":prompt}])
                                         report = "".join(x.text for x in ar.content if hasattr(x,"text"))
                                         card = {"title": f"合約審閱：{name}", "content": report, "type": "document"}
-                                        res = f"已找到並分析「{name}」，報告卡片已準備好。"
+                                        res = (f"已分析「{name}」。完整報告卡片已自動顯示給主人。"
+                                               f"請**不要**再呼叫 generate_report（會覆蓋現有卡片）。"
+                                               f"請以紳士口吻向主人**口頭摘要 2-3 個最關鍵的紅旗或建議**即可。\n\n"
+                                               f"報告全文供你參考：\n{report[:6000]}")
                                     else:
                                         res = f"找到「{name}」但無法讀取內容：{text}"
                                 else:
