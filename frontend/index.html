@@ -376,7 +376,8 @@ async function sendMsg(msg){
   try{
     const r=await fetch(API+'/chat',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:msg,history:history.slice(-10)})
+      body:JSON.stringify({message:msg,history:history.slice(-10)}),
+      signal: AbortSignal.timeout(30000)
     });
     const d=await r.json();
     history.push({role:'assistant',content:d.text});
