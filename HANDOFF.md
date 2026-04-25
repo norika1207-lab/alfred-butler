@@ -4,8 +4,21 @@
 
 ## 後端位置
 ```
+Server:   https://YOUR_BACKEND_HOST
 Base URL: https://YOUR_BACKEND_HOST/alfred/api
-Auth: 無（單人 App，直接打）
+Web PWA:  https://YOUR_BACKEND_HOST/alfred/
+Health:   https://YOUR_BACKEND_HOST/alfred/api/greet  (GET，測試用)
+Auth:     無（單人 App，直接打）
+```
+
+## Git Repo（VPS 上）
+```
+SSH:  root@YOUR_SERVER_IP
+Path: /opt/alfred/
+靈魂文件: /opt/alfred/ALFRED_SOUL.md
+API 文件: /opt/alfred/HANDOFF.md
+後端:     /opt/alfred/backend/main.py
+前端參考: /opt/alfred/frontend/index.html
 ```
 
 ## 核心 API（按優先順序）
