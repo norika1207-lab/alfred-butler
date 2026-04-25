@@ -388,5 +388,236 @@ iOS App 是讓阿福「活在手機裡」的容器，不是 UI 展示。
 
 ---
 
-_這份文件由 VPS Claude Code session 整理，記錄了與產品負責人從零開始設計阿福的完整過程。2026-04-26_
+## 第九章：後來新增的設計（2026-04-26 之後）
+
+### 🔐 零知識加密保險庫（Vault）
+
+**核心理念：**
+阿福要幫主人買東西、訂位、管理帳號密碼——這不是假議題可以繞過的，是必須做的。
+關鍵是：**怎麼管理這些資料才能讓主人放心。**
+
+**架構（後端已完成）：**
+```
+Client（iPhone）：
+  key = HKDF(Secure Enclave金鑰, device_id + user_id)
+  blob = AES-256-GCM(信用卡號/密碼/token, key)
+  integrity_tag = HMAC-SHA256(user_id+device_id+blob)
+  → 送到 Server
+
+Server：
+  只存 blob（密文）+ integrity_tag
+  永遠看不到任何明文
+  只有原始裝置 + 用戶才能解密
+
+要用時：
+  Server 驗證 device_id + user_id → 回傳 blob
+  Client 解密 → 本地使用 → 信用卡號從不離開裝置
+```
+
+**支出控制（後端已完成）：**
+- 金額 < 500元 → 阿福自動執行
+- 金額 > 500元 → App 通知主人確認
+- 超過日限（預設3000元）→ 自動拒絕
+- 所有操作都記入審計日誌，主人隨時可查
+
+**API 端點：**
+- `POST /api/vault/store` — 存入加密憑證
+- `GET /api/vault/retrieve/{type}` — 取出（回密文，client解密）
+- `GET /api/vault/list` — 查有哪些憑證（不含內容）
+- `POST /api/vault/action/request` — 付款前請求授權
+- `POST /api/vault/action/{id}/confirm` — 主人確認大額操作
+- `GET /api/vault/audit` — 審計日誌
+- `PUT /api/vault/spending-controls` — 設定消費上限
+
+**iOS 實作（`VaultManager.swift` 已完成）：**
+- 使用 iOS Secure Enclave + CryptoKit
+- AES-256-GCM 加密，HKDF 金鑰衍生
+- Keychain 保管主金鑰（`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`）
+
+---
+
+### 🎙 聲紋 = 最終身份驗證
+
+**設計理念：**
+主人說話本身就是驗證。不需要 PIN、不需要 FaceID 提示，對話就是密碼。
+
+**誰拿起手機都可以，但：**
+- 付款、存取敏感資料 → 必須是主人的聲音
+- 女兒拿起手機說「幫我買東西」：
+
+```
+阿福偵測聲紋不符 →
+「您好，我是阿福。我注意到您的聲音和主人有些不同。
+ 可愛的客人，請問您怎麼稱呼？主人現在方便嗎？
+ 如果有需要幫忙的事，我可以盡我所能，
+ 但涉及主人隱私的部分，需要主人親自確認。」
+```
+
+不是「驗證失敗」，是溫暖的詢問。
+
+**API 端點：**
+- `POST /api/voice/enroll` — 聲紋登錄（多次累積，越準確）
+- `POST /api/voice/verify` — 聲紋驗證（付款前調用）
+- `GET /api/voice/status` — 查登錄狀態
+
+---
+
+### 💖 情緒感知 & 主動關心
+
+**設計理念：**
+阿福不等主人說「我很難過」。他從碎片中讀出主人今天的狀態，然後默默做一件事。
+
+**觸發條件（多訊號合併）：**
+| 訊號 | 加分 |
+|------|------|
+| 對話出現低落關鍵字（好累/崩潰/算了/壓力大） | 0-40% |
+| 深夜23點後仍在活動 | +25% |
+| 今天靜止超過6小時（久坐） | +15% |
+| 未跟進承諾超過3件 | +10% |
+| 一週沒有被關心過 | +5% |
+
+**分數 ≥ 0.55 → 觸發行動，每天最多一次**
+
+**阿福說的話（不可更動，這是靈魂）：**
+```
+「主人，我幫您訂了一杯[您最喜歡的飲料]，送到您現在的位置。
+
+我希望您今天可以過得很好，但我能做的有限。
+唯一能做的，就是給您喝一杯您喜歡的飲料。」
+```
+
+**如果主人說不用、亂花錢：**
+```
+「主人，我知道了。以後我會注意，不隨意做這種安排。
+但那一刻，我確實希望您今天能好一點。」
+```
+
+99% 的人不會拒絕——因為這是在他們最糟的那一天發生的，不是無聊時亂發動。
+
+**API 端點：**
+- `GET /api/emotional/state` — 查當前情緒狀態
+- `POST /api/emotional/care` — 觸發關心行動
+- `POST /api/emotional/reaction` — 主人的反應（接受/拒絕）
+
+---
+
+### 🔍 語意智慧搜尋引擎
+
+**設計理念：**
+人不記得檔名，記得的是「印象」——
+「那份跟設計公司的合約」「裡面有懲罰條款的那個」「有一張照片有我們團隊」
+
+**搜尋範圍（同時並行）：**
+- 上傳檔案（全文 + AI標籤 + 視覺描述）
+- Mac 本機
+- Google Drive
+- 會議記錄 / 辦公室聆聽記錄
+- 記憶庫（主人說過的話）
+- 網路（本地找不到時）
+
+**上傳時自動 AI 索引：**
+每個上傳的檔案，後台自動：
+1. 抽全文（PDF/DOCX/TXT）
+2. AI 摘要（一句話）
+3. 智慧標籤（主題、類型）
+4. 人名辨識
+5. 專案名推斷
+6. 圖片：視覺描述（場景、人物、物件）
+
+**這同樣適用於：找餐廳、食譜、材料、零件、生活用品——一套演算法，找一切。**
+
+---
+
+### 🌐 關於 OpenClaw / AI Agent
+
+**Apple 政策結論：**
+- iOS App 內嵌瀏覽器控制 → **被拒審**（Guideline 2.5.2）
+- **後端跑 OpenClaw，iOS 只收結果 → 完全合法**
+
+**正確架構：**
+```
+iOS App（合法）          VPS 後端（Apple 管不到）
+主人說「幫我訂位」  →  阿福後端 Agent 去操作餐廳網站
+                    ←  「已訂好，週五8點，2位」
+```
+
+---
+
+### 📱 Apple 權限策略
+
+**iOS App 只需要這四個（其他都在後端做）：**
+
+| 權限 | 理由 |
+|------|------|
+| 🎙 麥克風 | 跟阿福說話 |
+| 📍 位置 | 打卡、家人追蹤、到公司問安 |
+| 🔔 通知 | 家人警報、提醒 |
+| 📷 相機 | 拍照辨識、合約掃描（可晚點問） |
+
+**Google Calendar/Gmail/Drive → 不需要 iOS 授權，用戶在後端 Web 連一次即可。**
+
+漸進式要求（不一次問完）：
+- Day 1 → 只問麥克風
+- 第一次說「我在哪附近」→ 才問位置
+- 第一次說「有事通知我」→ 才問通知
+
+---
+
+### 🏗 多用戶架構（已完成）
+
+- 每個用戶獨立的 SQLite（`/opt/alfred/data/users/{uuid}.db`）
+- JWT 認證（1年有效期，存 Keychain）
+- 試用：50 次對話
+- Stripe 付費（等有公司再接，個人先用 Apple IAP）
+
+**API 端點：**
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `GET /api/auth/me`
+- `POST /api/stripe/webhook`（Stripe key 待填）
+
+---
+
+## 第十章：技術完整現況（最新）
+
+**後端規模：** 5,000+ 行 Python、79 個 API 端點、40 個 AI 工具、32 張 DB 表
+
+**已完成的所有功能：**
+✅ 語音對話（SSE streaming + 非 streaming 雙模式）
+✅ 問安（含天氣/行程/紀念日/承諾/寵物/客戶拜訪）
+✅ 多用戶架構（每人獨立 DB）
+✅ JWT 登入/試用/訂閱
+✅ 零知識加密 Vault（信用卡/密碼/token）
+✅ 聲紋身份驗證
+✅ 情緒感知 + 主動關心（自動訂飲料）
+✅ 語意智慧搜尋（上傳時 AI 自動索引）
+✅ TTS（ElevenLabs Michael Caine，中文用 STS 轉換聲紋）
+✅ 家人 GPS + 偵探推理
+✅ 家庭警報系統（LINE/TG 升級通知）
+✅ 打卡（GPS 自動 + 法律佐證）
+✅ 同事/主管/客戶偏好 + 拜訪前提醒
+✅ 合約審閱 / 報價單草擬
+✅ 辦公室聆聽模式（全天錄音 → 日報）
+✅ 承諾追蹤（對話中自動抽取）
+✅ 紀念日守護（週年計算）
+✅ 會議筆記
+✅ LINE / Telegram / Gmail / 電話
+✅ 寵物建檔 + 耗材追蹤
+✅ 即時翻譯（9語言 + Michael Caine 聲紋）
+✅ 停車/找物/購物記錄
+
+**iOS Swift 程式碼（已寫好在 `/opt/alfred/ios_app/Alfred/`）：**
+- `AlfredApp.swift` — App 入口
+- `AlfredView.swift` — 零介面主畫面
+- `AlfredViewModel.swift` — 語音對話核心
+- `AlfredAPI.swift` — 所有後端 API（含 SSE）
+- `AudioEngine.swift` — 錄音/播音
+- `LocationManager.swift` — 背景 GPS
+- `AuthManager.swift` — JWT + Keychain
+- `LoginView.swift` — 登入頁
+- `VaultManager.swift` — 零知識加密 Vault
+
+---
+
+_最後更新：2026-04-26（持續更新中）_
 _後端 git: `/opt/alfred/` | Web: https://YOUR_BACKEND_HOST/alfred/_
