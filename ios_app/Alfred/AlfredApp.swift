@@ -4,6 +4,7 @@ import SwiftUI
 struct AlfredApp: App {
     @StateObject private var auth = AuthManager.shared
     @StateObject private var locationManager = LocationManager.shared
+    @StateObject private var backgroundManager = BackgroundManager.shared
 
     var body: some Scene {
         WindowGroup {
@@ -14,8 +15,17 @@ struct AlfredApp: App {
                             for: UIApplication.didBecomeActiveNotification)) { _ in
                             Task { await LocationManager.shared.checkContext() }
                         }
+                        .onAppear {
+                            backgroundManager.start()
+                        }
+                        .onDisappear {
+                            backgroundManager.stop()
+                        }
                 } else {
                     LoginView()
+                        .onAppear {
+                            backgroundManager.stop()
+                        }
                 }
             }
             .preferredColorScheme(.dark)
