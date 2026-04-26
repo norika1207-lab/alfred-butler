@@ -169,6 +169,60 @@ def get_upcoming_events(db_func, days: int = 7) -> list[dict]:
     return events
 
 
+def get_events_for_audit(db_func, days: int = 14) -> list[dict]:
+    """拿未來 N 天的會議完整資料，供會議瘦身分析用。"""
+    token = _get_access_token(db_func)
+    if not token:
+        return []
+
+    now = datetime.utcnow().isoformat() + "Z"
+    end = (datetime.utcnow() + timedelta(days=days)).isoformat() + "Z"
+
+    r = httpx.get(
+        f"{CALENDAR_API}/calendars/primary/events",
+        headers={"Authorization": f"Bearer {token}"},
+        params={
+            "timeMin": now, "timeMax": end,
+            "singleEvents": True, "orderBy": "startTime",
+            "maxResults": 50,
+        }, timeout=10
+    )
+    items = r.json().get("items", [])
+    events = []
+    for item in items:
+        start_raw = item.get("start", {})
+        end_raw = item.get("end", {})
+        start_dt = start_raw.get("dateTime", start_raw.get("date", ""))
+        end_dt = end_raw.get("dateTime", end_raw.get("date", ""))
+
+        # 計算時長（分鐘）
+        duration_min = None
+        try:
+            from datetime import datetime as _dt
+            s = _dt.fromisoformat(start_dt.rstrip("Z"))
+            e = _dt.fromisoformat(end_dt.rstrip("Z"))
+            duration_min = int((e - s).total_seconds() / 60)
+        except Exception:
+            pass
+
+        attendees = item.get("attendees", [])
+        is_recurring = bool(item.get("recurringEventId"))
+        organizer = item.get("organizer", {}).get("email", "")
+
+        events.append({
+            "id": item.get("id"),
+            "title": item.get("summary", "（無標題）"),
+            "start": start_dt[:16].replace("T", " ") if start_dt else "",
+            "duration_min": duration_min,
+            "attendee_count": len(attendees),
+            "is_recurring": is_recurring,
+            "organizer": organizer,
+            "has_agenda": bool(item.get("description", "").strip()),
+            "location": item.get("location", ""),
+        })
+    return events
+
+
 def _add_hour(time_str: str) -> str:
     """Add 1 hour to HH:MM string."""
     h, m = map(int, time_str.split(":"))
