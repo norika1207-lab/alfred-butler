@@ -3230,6 +3230,10 @@ async def chat(req: ChatReq,
                                 res = (f"已對比 {len(docs)} 份合約，差異報告已顯示在畫面上。"
                                        f"請口頭摘要最關鍵的 1-2 個差異給主人即可。\n\n報告供參考：\n{report[:4000]}")
 
+                elif b.name in ("show_family", "show_office", "show_translate", "show_attendance"):
+                    action = {"type": b.name}
+                    res = "ok"
+
                 c.commit(); c.close()
                 results.append({"tool_call_id": b.id, "name": b.name, "result": str(res)})
 
