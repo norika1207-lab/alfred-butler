@@ -87,7 +87,10 @@ class AlfredViewModel: NSObject, ObservableObject {
                 }
                 if chunk.done == true {
                     if let c = chunk.card { card = c }
-                    // action 處理（翻譯、上傳等）
+                    if let action = chunk.action {
+                        await handleAction(action, fullText: fullText)
+                        return  // action 接管後續播放
+                    }
                 }
             }
             history.append(["role": "assistant", "content": fullText])
