@@ -1702,6 +1702,133 @@ async def chat(req: ChatReq,
                             res = f"信件已發送給 {inp['to']}"
                         else:
                             res = "發送失敗，請確認 Gmail 授權包含 gmail.send 權限"
+
+                elif b.name == "draft_email":
+                    if not gmail_service or not GCAL_CONFIGURED:
+                        res = "Gmail 未授權，請先完成 Google 授權"
+                    else:
+                        dmode = inp.get("mode", "compose")
+
+                        if dmode == "send_draft":
+                            did = inp.get("draft_id", "")
+                            if not did:
+                                res = "請提供草稿 ID（draft_id）"
+                            else:
+                                ok = gmail_service.send_draft(db, did)
+                                res = "草稿已寄出。" if ok else "寄出失敗，請確認草稿 ID 正確。"
+
+                        elif dmode in ("compose", "reply"):
+                            # ── 1. 解析收件人 email ───────────────────────────────
+                            to_email = inp.get("recipient_email", "").strip()
+                            to_name  = inp.get("recipient_name", "").strip()
+                            if not to_email and to_name:
+                                c2 = db()
+                                row_contact = c2.execute(
+                                    "SELECT emails FROM contacts_index WHERE name LIKE ? ORDER BY indexed_at DESC LIMIT 1",
+                                    (f"%{to_name}%",)
+                                ).fetchone()
+                                if not row_contact:
+                                    row_contact = c2.execute(
+                                        "SELECT contact FROM relationships WHERE nickname LIKE ? OR real_name LIKE ? LIMIT 1",
+                                        (f"%{to_name}%", f"%{to_name}%")
+                                    ).fetchone()
+                                c2.close()
+                                if row_contact and row_contact[0]:
+                                    raw = row_contact[0]
+                                    # 取第一個看起來像 email 的字串
+                                    import re as _re
+                                    found = _re.findall(r"[\w.\-+]+@[\w.\-]+\.\w+", raw)
+                                    to_email = found[0] if found else ""
+
+                            if not to_email:
+                                res = (f"找不到「{to_name}」的 email 地址。"
+                                       "請提供完整 email（recipient_email），或先把聯絡資料存入通訊錄。")
+                            else:
+                                # ── 2. 抓情境（近期會議/承諾/備忘）─────────────────
+                                ctx_lines = []
+                                c2 = db()
+                                # 近 14 天與收件人有關的行事曆
+                                cal_rows = c2.execute(
+                                    "SELECT title, event_date FROM calendar_events "
+                                    "WHERE (title LIKE ? OR notes LIKE ?) AND event_date >= date('now','-14 day') "
+                                    "ORDER BY event_date DESC LIMIT 3",
+                                    (f"%{to_name}%", f"%{to_name}%")
+                                ).fetchall() if to_name else []
+                                for r in cal_rows:
+                                    ctx_lines.append(f"・近期會議：{r[0]}（{r[1]}）")
+                                # 未完成承諾
+                                promise_rows = c2.execute(
+                                    "SELECT content FROM promises WHERE to_whom LIKE ? AND status='pending' LIMIT 2",
+                                    (f"%{to_name}%",)
+                                ).fetchall() if to_name else []
+                                for r in promise_rows:
+                                    ctx_lines.append(f"・未兌現承諾：{r[0]}")
+                                c2.close()
+                                ctx_block = "\n".join(ctx_lines) if ctx_lines else "（無特別情境）"
+
+                                # ── 3. 讀取要回覆的原信內容（reply 模式）─────────
+                                original_snippet = ""
+                                if dmode == "reply":
+                                    rid = inp.get("reply_to_id", "")
+                                    if rid:
+                                        original_snippet = gmail_service.get_message_body(db, rid)[:1500]
+
+                                # ── 4. AI 草擬信件 ───────────────────────────────
+                                tone_map = {"formal": "正式商業", "friendly": "親切友善", "brief": "簡短扼要"}
+                                tone_str = tone_map.get(inp.get("tone", "formal"), "正式商業")
+                                intent = inp.get("intent", "")
+                                subj_hint = inp.get("subject", "")
+
+                                prompt_parts = [
+                                    f"請以繁體中文草擬一封{tone_str}的電子郵件。",
+                                    f"收件人：{to_name or to_email}",
+                                    f"目的：{intent}" if intent else "",
+                                    f"主旨提示：{subj_hint}" if subj_hint else "",
+                                    f"情境參考：\n{ctx_block}",
+                                    f"原信內容（供回覆參考）：\n{original_snippet}" if original_snippet else "",
+                                    "請輸出格式：\n主旨：...\n---\n（信件正文）",
+                                    "語氣自然，不要過度花俏，代表寄件者本人撰寫。"
+                                ]
+                                prompt = "\n".join(p for p in prompt_parts if p)
+                                draft_text = _simple_chat(prompt, max_tokens=800)
+
+                                # ── 5. 解析主旨與正文 ────────────────────────────
+                                subject_out = subj_hint or f"{'Re: ' if dmode=='reply' else ''}{'關於' + to_name if to_name else '信件'}"
+                                body_out = draft_text
+                                if "主旨：" in draft_text:
+                                    lines_d = draft_text.split("\n")
+                                    subj_lines = [l for l in lines_d if l.startswith("主旨：")]
+                                    if subj_lines:
+                                        subject_out = subj_lines[0].replace("主旨：", "").strip()
+                                    sep = draft_text.find("---")
+                                    body_out = draft_text[sep+3:].strip() if sep != -1 else draft_text
+
+                                # ── 6. 存入草稿匣 ────────────────────────────────
+                                draft_id = gmail_service.create_draft(db, to_email, subject_out, body_out)
+                                if draft_id:
+                                    card = {
+                                        "title": f"草稿：{subject_out}",
+                                        "content": (
+                                            f"**收件人：** {to_email}\n"
+                                            f"**主旨：** {subject_out}\n\n"
+                                            f"---\n{body_out}\n\n"
+                                            f"---\n*草稿 ID：`{draft_id}`*\n"
+                                            f"*確認後說「寄出草稿 {draft_id}」即可發送。*"
+                                        ),
+                                        "type": "document"
+                                    }
+                                    action = {"type": "email_drafted", "draft_id": draft_id,
+                                              "to": to_email, "subject": subject_out}
+                                    res = (f"草稿已存入 Gmail 草稿匣。收件人：{to_email}，主旨：{subject_out}。"
+                                           f"主人確認後說「寄出」即可，草稿 ID：{draft_id}。")
+                                else:
+                                    # 存草稿失敗，退回顯示卡片讓主人自行複製
+                                    card = {
+                                        "title": f"信件草稿：{subject_out}",
+                                        "content": f"**收件人：** {to_email}\n**主旨：** {subject_out}\n\n---\n{body_out}",
+                                        "type": "document"
+                                    }
+                                    res = "草稿無法存入 Gmail（可能需要 gmail.compose 授權），已顯示內容供主人參考。"
                 elif b.name == "send_line_message":
                     msg_text = inp.get("message", "")
                     target_id = inp.get("user_id", "")
