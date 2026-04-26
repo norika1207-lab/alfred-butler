@@ -93,10 +93,14 @@ class AlfredViewModel: NSObject, ObservableObject {
 
     // MARK: - Send message (SSE stream)
     func sendMessage(_ message: String) async {
-        // 偵測啟動語 → 標記 onboarded
+        // 偵測啟動語 → 標記 onboarded + 自動取得 JWT token
         if message.contains("我是你的主人") && message.contains("幫我把每一件事情處理好") {
             UserDefaults.standard.set(true, forKey: "alfred_onboarded")
             isFirstLaunch = false
+            if api.token == nil {
+                let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
+                _ = try? await api.deviceLogin(deviceId: deviceId)
+            }
         }
 
         state = .thinking
