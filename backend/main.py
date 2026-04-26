@@ -2468,6 +2468,69 @@ async def chat(req: ChatReq,
                                 lines.append(f"• [{r[1]}] {status_ch}，{r[5]} 段，{r[3][5:16] if r[3] else ''}")
                             res = "\n".join(lines)
 
+                elif b.name == "log_workout":
+                    w_action = inp.get("action", "record")
+                    if w_action == "record":
+                        wtype = inp.get("workout_type", "unknown")
+                        dur = inp.get("duration_min")
+                        dist = inp.get("distance_km")
+                        cals = inp.get("calories")
+                        hr = inp.get("avg_heart_rate")
+                        notes = inp.get("notes", "")
+                        now_iso = datetime.now().isoformat()
+                        c.execute(
+                            "INSERT INTO workouts (workout_type,duration_min,distance_km,calories,avg_heart_rate,notes,source,ts) "
+                            "VALUES (?,?,?,?,?,?,'chat',?)",
+                            (wtype, dur, dist, cals, hr, notes, now_iso)
+                        )
+                        parts = []
+                        if dur: parts.append(f"{dur:.0f} 分鐘")
+                        if dist: parts.append(f"{dist:.1f} 公里")
+                        if cals: parts.append(f"{cals:.0f} 卡")
+                        if hr: parts.append(f"平均心率 {hr} bpm")
+                        res = f"已記錄{wtype}運動：{', '.join(parts) if parts else '完成'}。"
+                    elif w_action == "list":
+                        rows = c.execute(
+                            "SELECT workout_type,duration_min,distance_km,calories,avg_heart_rate,ts "
+                            "FROM workouts ORDER BY ts DESC LIMIT 10"
+                        ).fetchall()
+                        if not rows:
+                            res = "尚無運動記錄。"
+                        else:
+                            lines = ["最近運動紀錄："]
+                            for r in rows:
+                                wt, dur, dist, cal, hr2, ts2 = r
+                                tag = ts2[:10] if ts2 else ""
+                                detail = " / ".join(filter(None, [
+                                    f"{dur:.0f}分" if dur else None,
+                                    f"{dist:.1f}km" if dist else None,
+                                    f"{cal:.0f}kcal" if cal else None,
+                                    f"HR{hr2}" if hr2 else None
+                                ]))
+                                lines.append(f"• {tag} {wt}：{detail}")
+                            res = "\n".join(lines)
+                    elif w_action == "summary":
+                        rows = c.execute(
+                            "SELECT workout_type, SUM(duration_min), SUM(distance_km), SUM(calories), COUNT(*) "
+                            "FROM workouts WHERE ts >= date('now','-7 day') GROUP BY workout_type"
+                        ).fetchall()
+                        if not rows:
+                            res = "本週尚無運動記錄。"
+                        else:
+                            lines = ["本週運動統計："]
+                            for r in rows:
+                                wt, tot_dur, tot_dist, tot_cal, cnt = r
+                                detail = " / ".join(filter(None, [
+                                    f"{tot_dur:.0f}分鐘" if tot_dur else None,
+                                    f"{tot_dist:.1f}km" if tot_dist else None,
+                                    f"{tot_cal:.0f}kcal" if tot_cal else None,
+                                    f"共{cnt}次"
+                                ]))
+                                lines.append(f"• {wt}：{detail}")
+                            res = "\n".join(lines)
+                    else:
+                        res = "未知 action"
+
                 elif b.name == "help_quote":
                     qmode = inp.get("mode", "analyze_history")
                     brief = (inp.get("case_brief") or "").strip()
