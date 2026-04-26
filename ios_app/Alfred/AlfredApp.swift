@@ -31,6 +31,7 @@ struct AlfredApp: App {
             .environmentObject(auth)
         }
         .onChange(of: scenePhase) { _, phase in
+            BackgroundManager.shared.isAppActive = (phase == .active)
             if phase == .active && auth.isLoggedIn {
                 Task { await LocationManager.shared.checkContext() }
             }
