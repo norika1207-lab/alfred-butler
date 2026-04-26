@@ -250,6 +250,11 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "阿福用您的運動與心率資料，了解您的身體狀態";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "阿福不會修改您的健康資料";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "阿福持續知道您的位置，才能在背景偵測您到達或離開特定地點";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "阿福知道您在哪裡，才能在到家、進辦公室時提供對應協助";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "按住阿福的頭像對他說話";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -270,7 +275,7 @@
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -292,6 +297,11 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "阿福用您的運動與心率資料，了解您的身體狀態";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "阿福不會修改您的健康資料";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "阿福持續知道您的位置，才能在背景偵測您到達或離開特定地點";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "阿福知道您在哪裡，才能在到家、進辦公室時提供對應協助";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "按住阿福的頭像對他說話";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -312,7 +322,7 @@
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
