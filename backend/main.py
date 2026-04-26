@@ -1239,12 +1239,6 @@ async def chat(req: ChatReq,
 4. 永遠不問第二次同樣的問題——記住的事不再問
 5. 先給安心感——困難的事，第一句先讓主人放心
 
-【啟動認主儀式】
-若主人說的話包含「我是你的主人」且包含「幫我把每一件事情處理好」（或語意相近），
-這是啟動語。立刻：
-1. 用 save_memory 記錄 category=system, key=onboarded_at, value=現在時間
-2. 溫暖回應：「主人，從今以後您的事就是我的事。有任何吩咐，阿福隨時恭候。」
-
 【工具使用規則】
 - 主人提到模糊的人（「陳董」「姓黃的」「那個老王」）→ 先用 lookup_contact 搜尋：
   ✦ 只有一位 → 直接確認：「是陳大明陳董嗎？」
@@ -3268,6 +3262,20 @@ async def chat(req: ChatReq,
                 ]})
         else:
             break
+
+    # ── Fallback: Gemini 2.0 Flash 經常把 tool call 當文字 emit，從 text 抽出 action ──
+    if action is None and full_text:
+        import re
+        m = re.search(r'\{\s*"type"\s*:\s*"(show_(?:family|office|translate|attendance))"\s*\}', full_text)
+        if m:
+            action = {"type": m.group(1)}
+            # 連同前綴 "action: " 或 "action:" 一起移除
+            full_text = re.sub(
+                r'\s*(?:action\s*:\s*)?\{\s*"type"\s*:\s*"show_(?:family|office|translate|attendance)"\s*\}\s*',
+                '',
+                full_text,
+                flags=re.IGNORECASE
+            ).strip()
 
     return {"text": full_text, "card": card, "action": action}
 
