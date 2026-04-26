@@ -1026,7 +1026,7 @@ TOOLS = [
 
     # ── 介面行動（推開 iOS sheet）────────────────────────────────────────
     {"name": "show_family", "description":
-        "推開家庭感知頁。主人問家人位置、家人安全、「小芸在哪」「太太回來了嗎」「小孩到學校了嗎」時呼叫。",
+        "推開家庭感知頁。主人問家人位置、家人安全、「家人在哪」「太太回來了嗎」「小孩到學校了嗎」時呼叫。",
      "input_schema": {"type": "object", "properties": {}}},
 
     {"name": "show_office", "description":
@@ -1187,8 +1187,8 @@ async def chat(req: ChatReq,
 - 所有建議都是「您可以……要不要……」，不是「您必須立刻……」
 - 結尾永遠給主人選擇：要我怎麼做？等等看？還是先聯絡一下？
 
-好的例子：「主人，小芸目前在一個有些特別的地方，我幫您留意著。不一定有什麼事，但您方便的話，輕鬆問她一句在哪裡就好。」
-不好的例子：「⚠️ 緊急！小芸在危險場所！請立刻聯絡她！」
+好的例子：「主人，您家人目前在一個有些特別的地方，我幫您留意著。不一定有什麼事，但您方便的話，輕鬆問一句在哪裡就好。」
+不好的例子：「⚠️ 緊急！家人在危險場所！請立刻聯絡！」
 
 【情境回應】
 - 主人熬夜加班（超過晚上10點還在工作）：主動說「辛苦了，忙碌一整天，回去好好洗個澡，早點休息。」
@@ -1299,7 +1299,8 @@ async def chat(req: ChatReq,
 這是主動判斷，不等主人說「打開頁面」——判斷主人需要看到資訊就直接呼叫。
 說完話再呼叫 tool，一次只呼叫一個，純聊天不呼叫。
 
-繁體中文，稱呼「主人」，說話像在說話不像在打字，不說廢話。""" + alert_injection
+繁體中文，稱呼「主人」，說話像在說話不像在打字，不說廢話。
+**絕對不要編造任何家人、同事、朋友的人名**（不要說「小芸」「小雲」「小明」等虛構名字）。如果不知道對方名字，用「您家人」「您同事」「對方」等通用稱呼。""" + alert_injection
 
     msgs = list(req.history[-10:])
     msgs.append({"role": "user", "content": req.message})
@@ -3301,11 +3302,13 @@ async def greet():
     ).fetchone()
     c_check.close()
 
-    if not onboarded:
+    if not city_set and not onboarded:
         return {
             "text": (
-                "主人您好，請您依照以下內容說話，作為我認識您的開始："
-                "「阿福，我是你的主人，我會有很多地方需要你的幫忙，你要幫我把每一件事情處理好。」"
+                "我是您的管家，阿福，很高興能夠服務您。"
+                "如果您有任何需求，可以直接跟我對話，在我能力所及的範圍內會盡力達成。"
+                "如果有無法達成之處，還請您見諒，未來我會再提升自己的能力。\n\n"
+                "請問您住在哪個城市呢？我會為您安排當地的天氣與日常資訊。"
             ),
             "first_time": True
         }
@@ -3476,30 +3479,56 @@ async def greet():
             if visit_hint:
                 break
 
-    # 最多說一件最重要的事，留空間給主人說話
-    priority = ""
-    if ann_hint:
-        priority = ann_hint
-    elif visit_hint:
-        priority = visit_hint
-    elif late_night_care:
-        priority = late_night_care
-    elif events_today:
-        ev = events_today[0]
-        t = f"{ev[1]}，" if ev[1] else ""
-        priority = f"今天{t}有「{ev[0]}」。"
-    elif old_promise:
-        priority = f"您之前答應{old_promise[0]}要{old_promise[1]}，還沒跟進。"
-    elif pet_supply_warn:
-        priority = pet_supply_warn
-
     parts = [f"主人，{period}。"]
-    if weather and not late_night_care:
-        parts.append(f"{weather}。")
-    if priority and not late_night_care:
-        parts.append(priority)
-    elif late_night_care:
+    if late_night_care:
         parts.append(late_night_care)
+    elif weather:
+        parts.append(f"{weather}。")
+    if not late_night_care:
+        if ann_hint:
+            parts.append(ann_hint)
+        if visit_hint:
+            parts.append(visit_hint)
+        elif events_today:
+            ev = events_today[0]
+            t = f"{ev[1]}，" if ev[1] else ""
+            parts.append(f"今天{t}有「{ev[0]}」。")
+        if todos_followup:
+            parts.append(f"「{todos_followup[0]}」這件事，還沒處理。")
+        if old_promise and not todos_followup:
+            parts.append(f"還有，您之前答應{old_promise[0]}要{old_promise[1]}，還沒跟進。")
+        if pet_supply_warn:
+            parts.append(pet_supply_warn)
+
+    # Proactive connection nudge — check what's not yet connected
+    c2 = db()
+    nudges = []
+    # Google not connected
+    if not (gcal_service and gcal_service.is_connected(db)):
+        nudges.append("Google 行事曆")
+    # LINE not connected
+    line_user = c2.execute("SELECT value FROM memories WHERE category='line' AND key='owner_user_id' LIMIT 1").fetchone()
+    if not line_user:
+        nudges.append("LINE")
+    # Telegram not connected
+    tg_user = c2.execute("SELECT value FROM memories WHERE category='telegram' AND key='owner_chat_id' LIMIT 1").fetchone()
+    if not tg_user:
+        nudges.append("Telegram")
+    # Contacts not imported
+    contacts_n = c2.execute("SELECT COUNT(*) FROM contacts_index").fetchone()[0]
+    if contacts_n == 0:
+        nudges.append("Apple 聯絡人")
+    # Mac not connected
+    mac_n = c2.execute("SELECT COUNT(*) FROM mac_files_index").fetchone()[0]
+    if mac_n == 0:
+        nudges.append("Mac 檔案")
+    c2.close()
+
+    # Mention nudge once — randomly pick one to avoid overwhelming
+    if nudges:
+        import random
+        pick = random.choice(nudges)
+        parts.append(f"另外，「{pick}」還沒有連線，方便的話可以讓阿福接上，功能會更完整。")
 
     return {"text": "".join(parts)}
 
@@ -3601,7 +3630,7 @@ async def tts(req: TTSReq):
         return StreamingResponse(iter([b""]), media_type="audio/mpeg")
 
     lang = _detect_lang(req.text)
-    VOICE_ID = "YWnZZfEtTni5X2rz4DEg"  # Alfred 阿福 (Michael Caine)
+    VOICE_ID = "nPczCjzI2devNBz1zQrb"  # Brian (Deep, Resonant and Comforting) — 暫用，等用戶重 clone Michael Caine
 
     # 清理文字：去掉 TTS 念不好的符號
     import re as _re
@@ -3621,8 +3650,6 @@ async def tts(req: TTSReq):
     text = _re.sub(r'[\U00010000-\U0010ffff]', '', text)
     # 移除多餘空白
     text = _re.sub(r'\s+', ' ', text).strip()
-    # 中文斷句補逗號（念到「的」「了」「著」後面若緊跟長句，加逗號幫 TTS 斷氣）
-    text = _re.sub(r'([的了著嗎啊呢吧])\s*([^，。！？、…\s]{4,})', r'\1，\2', text)
     # 截斷（TTS 最多 2500 字元）
     text = text[:2500]
 
@@ -3634,9 +3661,9 @@ async def tts(req: TTSReq):
                 "text": text,
                 "model_id": "eleven_turbo_v2_5",
                 "voice_settings": {
-                    "stability": 0.52,
-                    "similarity_boost": 0.80,
-                    "style": 0.30,
+                    "stability": 0.80,        # 高穩定 → 音量一致，不忽大忽小
+                    "similarity_boost": 0.75,
+                    "style": 0.10,            # 低 style → 平穩，不過度戲劇
                     "use_speaker_boost": False
                 }
             }
@@ -4031,40 +4058,6 @@ def discover_features():
 class AuthReq(BaseModel):
     email: str
     password: str
-
-@app.post("/api/auth/device")
-async def device_auth(data: dict):
-    """無密碼裝置認證。device_id = iOS identifierForVendor。自動 register 或 login。"""
-    device_id = (data.get("device_id") or "").strip()
-    if not device_id or len(device_id) < 8:
-        raise HTTPException(400, "invalid device_id")
-
-    email = f"device_{device_id}@alfred.local"
-    password = device_id  # deterministic，不需要用戶記
-    c = auth_db()
-    row = c.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
-
-    if row:
-        # 已存在 → 直接給 token
-        user_id = row[0]
-        c.execute("UPDATE users SET last_seen=? WHERE id=?", (datetime.now().isoformat(), user_id))
-        c.commit(); c.close()
-    else:
-        # 新裝置 → 建帳號
-        user_id = str(uuid.uuid4())
-        pw_hash = _pwd_ctx.hash(password)
-        now = datetime.now().isoformat()
-        c.execute(
-            "INSERT INTO users (id,email,password_hash,created_at,last_seen) VALUES (?,?,?,?,?)",
-            (user_id, email, pw_hash, now, now)
-        )
-        c.commit(); c.close()
-        udb = user_db(user_id)
-        _init_user_db(udb)
-        udb.close()
-
-    token = _make_token(user_id)
-    return {"ok": True, "token": token, "user_id": user_id}
 
 @app.post("/api/auth/register")
 async def register(req: AuthReq):
