@@ -476,6 +476,19 @@ def init_db():
              session_id INTEGER, seq INTEGER,
              raw_transcript TEXT, filtered_transcript TEXT,
              ts TEXT);
+        CREATE TABLE IF NOT EXISTS workouts
+            (id INTEGER PRIMARY KEY AUTOINCREMENT,
+             workout_type TEXT,
+             start_time TEXT, end_time TEXT,
+             duration_min REAL,
+             distance_km REAL,
+             calories REAL,
+             avg_heart_rate INTEGER,
+             max_heart_rate INTEGER,
+             steps INTEGER,
+             source TEXT DEFAULT 'healthkit',
+             notes TEXT,
+             ts TEXT);
     """)
     c.commit(); c.close()
 
