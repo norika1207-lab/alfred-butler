@@ -3621,22 +3621,22 @@ async def tts(req: TTSReq):
     text = _re.sub(r'[\U00010000-\U0010ffff]', '', text)
     # 移除多餘空白
     text = _re.sub(r'\s+', ' ', text).strip()
+    # 中文斷句補逗號（念到「的」「了」「著」後面若緊跟長句，加逗號幫 TTS 斷氣）
+    text = _re.sub(r'([的了著嗎啊呢吧])\s*([^，。！？、…\s]{4,})', r'\1，\2', text)
     # 截斷（TTS 最多 2500 字元）
     text = text[:2500]
 
-    # 中文英文都直接用 Michael Caine 聲音 + eleven_multilingual_v2
-    # 文字已清理，不會再有滴滴聲
     async with httpx.AsyncClient(timeout=60) as c:
         resp = await c.post(
             f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}",
             headers={"xi-api-key": el_key, "Content-Type": "application/json"},
             json={
                 "text": text,
-                "model_id": "eleven_multilingual_v2",
+                "model_id": "eleven_turbo_v2_5",
                 "voice_settings": {
-                    "stability": 0.55,
-                    "similarity_boost": 0.82,
-                    "style": 0.38,
+                    "stability": 0.52,
+                    "similarity_boost": 0.80,
+                    "style": 0.30,
                     "use_speaker_boost": False
                 }
             }
