@@ -7298,11 +7298,16 @@ def office_list_supplies(user_id: str = Depends(require_user)):
     c = db(user_id)
     try:
         rows = c.execute(
-            "SELECT id,item,category,quantity,threshold,unit,last_ordered FROM office_supplies ORDER BY category,item"
+            "SELECT item,quantity,threshold,unit FROM office_supplies ORDER BY category,item"
         ).fetchall()
-        return [{"id":r[0],"item":r[1],"category":r[2],"quantity":r[3],
-                 "threshold":r[4],"unit":r[5],"last_ordered":r[6],
-                 "low": r[3]<=r[4]} for r in rows]
+        result = []
+        for item, qty, threshold, unit in rows:
+            if qty <= 0:            level = "critical"
+            elif qty <= threshold:  level = "low"
+            else:                   level = "ok"
+            note = f"剩 {qty} {unit or '個'}" if unit else f"剩 {qty} 個"
+            result.append({"name": item, "level": level, "note": note})
+        return result
     finally:
         c.close()
 
