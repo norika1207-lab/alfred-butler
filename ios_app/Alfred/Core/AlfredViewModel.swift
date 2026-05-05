@@ -20,6 +20,7 @@ class AlfredViewModel: NSObject, ObservableObject {
     @Published var showOffice: Bool = false
     @Published var showTranslate: Bool = false
     @Published var showAttendance: Bool = false
+    @Published var subApp: SubAppConfig? = nil   // sub-app sheet
 
     enum AlfredState { case idle, listening, thinking, speaking }
 
