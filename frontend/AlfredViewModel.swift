@@ -17,6 +17,7 @@ class AlfredViewModel: NSObject, ObservableObject {
     @Published var isFirstLaunch: Bool = false
     @Published var translationOverlay: TranslationOverlay? = nil  // 翻譯大字顯示
     var pendingHealthCheckin: Bool = false       // 等待主人回應健康確認
+    var pendingEmergencyCall: Bool = false      // 等待主人確認是否撥 119
 
     enum AlfredState { case idle, listening, thinking, speaking }
 
