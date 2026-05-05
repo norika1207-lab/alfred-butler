@@ -287,6 +287,38 @@ ssh YOUR_SERVER 'systemctl restart alfred'
 ### iOS Build
 Xcode 26.4 → 選實機 → Cmd+R
 
+### 跨電腦 Build 完整性
+
+目前本機 repo 已把 source、resources、voice bank、備份檔，以及當次 build 產物都 commit 進 git。換另一台電腦時，檔案層面應可完整還原；真正會影響 build 的外部條件如下：
+
+| 條件 | 要求 |
+|---|---|
+| Xcode | 建議使用 `/Applications/Xcode.app`，目前驗證過 Xcode / iOS SDK 26.4 |
+| Apple signing | 需要可用的 Apple Developer Team 與 `Norika.Alfred` provisioning profile，或在 Xcode 重新選 Team |
+| 後端 | VPS `YOUR_SERVER` 上的 `alfred.service` 必須 active |
+| API base | iOS client 指向 `https://YOUR_BACKEND_HOST/alfred/api` |
+| 實機安裝 | iPhone 需解鎖、信任開發者憑證，並由 Xcode/devicectl 安裝 |
+
+已驗證的本機編譯命令：
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+xcodebuild \
+  -project /Users/YOUR_USER/Dropbox/Alfred/Alfred/Alfred.xcodeproj \
+  -scheme Alfred \
+  -destination 'generic/platform=iOS' \
+  -configuration Debug build
+```
+
+已驗證的實機安裝：
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+xcrun devicectl device install app \
+  --device <device-id> \
+  /Users/YOUR_USER/Library/Developer/Xcode/DerivedData/Alfred-comiywlbirvcrnfmmzrnhngzvdpy/Build/Products/Debug-iphoneos/Alfred.app
+```
+
 **CLI build（需先設 developer path）：**
 ```bash
 sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
@@ -317,6 +349,54 @@ xcrun simctl launch booted Norika.Alfred --prompt "幫我看辦公室狀況"
 
 ---
 
+## 測試報告與目前品質狀態
+
+完整測試紀錄請看：
+
+```text
+TEST_REPORTS.md
+/Users/YOUR_USER/Documents/New project 3/alfred_30x_test_report.json
+```
+
+### 2026-05-06 測試輪次
+
+| 輪次 | 測試內容 | 結果 | 改進 |
+|---|---|---:|---|
+| Round 1 | 文件上傳 → 文件解讀摘要 API smoke test | PASS | 後端從「合約專用」改成「通用文件解讀」，非合約不再硬套合約格式 |
+| Round 2 | iOS generic build + iPhone install + launch | PASS | 手機端加入 `文件分析` 測試入口，不必只靠語音觸發上傳 |
+| Round 3 | 46 個安全 API / 功能群各跑 30 次 | PASS | 1380/1380 通過，核心 safe API surface 穩定 |
+
+### 30x 回歸測試摘要
+
+| 指標 | 數值 |
+|---|---:|
+| 測試功能群 | 46 |
+| 每項重複次數 | 30 |
+| 總檢查數 | 1380 |
+| 通過 | 1380 |
+| 失敗 | 0 |
+| 通過率 | 100% |
+
+明確通過的核心項目：
+
+- `files_upload`: 30/30
+- `document_analysis`: 30/30
+- `translate`: 30/30
+- `chat_light`: 30/30
+- `greet`, `auth_me`, `setup_status`, `onboard_status`: 30/30
+- family / health / office / attendance / location / Drive / Mac status 類安全查詢：全部 30/30
+
+### 和舊 baseline 的差異
+
+| 時間 | 測試 | 結果 |
+|---|---|---|
+| 2026-04-26 | 50 calls（5 iter × 10 prompts） | 82% hit rate，0 errors，平均延遲 6.7s |
+| 2026-05-06 | 46 groups × 30 runs | 100% transport/API pass rate，0 failures |
+
+注意：2026-05-06 的 100% 是「安全可自動驗證 API」通過率，不代表所有真實外部副作用功能都已 production-ready。真實電話、寄信、LINE/Telegram 推播、緊急通知需要 dummy recipient / sandbox channel 後再測。
+
+---
+
 ## 已實作功能清單
 
 | 功能 | 說明 |
@@ -340,6 +420,7 @@ xcrun simctl launch booted Norika.Alfred --prompt "幫我看辦公室狀況"
 | 出勤記錄 | 上下班記錄查詢 |
 | HealthKit 同步 | 運動紀錄上傳後端 |
 | 第三方 AI 同意 | 首次啟動 ConsentView（App Store 5.1.2(i) 合規） |
+| 手機文件分析入口 | iPhone 主畫面 `文件分析` → Files picker → upload → summary card |
 
 ---
 
