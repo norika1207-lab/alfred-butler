@@ -1,3 +1,6 @@
 .env
 *.bak*
 __pycache__/
+*.pem
+*.db
+server.log
