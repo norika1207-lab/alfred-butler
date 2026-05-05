@@ -2,7 +2,7 @@ import Foundation
 import UserNotifications
 
 // MARK: - Background Manager
-// 提醒輪詢（60 秒）+ 家人警報（30 秒）+ 拜訪前提醒（30 分）
+// 提醒輪詢（60 秒）+ 家人警報（30 秒）+ 拜訪前提醒（30 分）+ 健康監控 + 用藥提醒
 
 @MainActor
 class BackgroundManager: ObservableObject {
@@ -15,7 +15,10 @@ class BackgroundManager: ObservableObject {
     private var alertTask: Task<Void, Never>?
     private var visitTask: Task<Void, Never>?
     private var familyTask: Task<Void, Never>?
+    private var medicationTask: Task<Void, Never>?
+    private var healthStatusTask: Task<Void, Never>?
     private var acknowledgedAlerts: Set<Int> = []
+    private var medicationNotifiedToday: Set<String> = []
 
     func start() {
         requestNotificationPermission()
@@ -23,6 +26,8 @@ class BackgroundManager: ObservableObject {
         startAlertPolling()
         startVisitPolling()
         startFamilyPolling()
+        startMedicationPolling()
+        startHealthStatusPolling()
     }
 
     func stop() {
@@ -30,6 +35,8 @@ class BackgroundManager: ObservableObject {
         alertTask?.cancel()
         visitTask?.cancel()
         familyTask?.cancel()
+        medicationTask?.cancel()
+        healthStatusTask?.cancel()
     }
 
     // MARK: - 提醒輪詢（60 秒）
