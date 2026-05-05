@@ -3039,7 +3039,11 @@ async def chat(req: ChatReq,
 - 主人說「幫我排會議」「看看什麼時候方便」→ 用 find_meeting_slots，然後自然說出：「主人，您習慣下午兩點開會，這週週二和週四下午兩點都有空，要排哪天？」
 - 主人說「會議太多了」「幫我看哪些會議可以砍」「這週行程太滿」「幫我整理會議」→ 用 meeting_audit（會議瘦身），回傳卡片給主人看
 - 排會議時間若在 11:30-13:30 之間 → 排完後主動問：「這是午餐時段，需要我幫您順便訂餐嗎？幾個人？」
-- 主人說「找拉麵」「附近有什麼吃的」「幫我找XX餐廳」「XX路附近有沒有OO」→ **立刻呼叫 search_restaurants**，不需等主人確認訂餐。搜到結果說出來，最後問「需要我幫您訂位嗎？」
+- 主人說「找拉麵」「附近有什麼吃的」「幫我找XX餐廳」「XX路附近有沒有OO」→ **立刻呼叫 search_restaurants**，不需等主人確認訂餐。
+- search_restaurants 結果開頭會有 `[GPS_MODE:xxx]` 標記，依此決定回應方式：
+  ✦ `GPS_MODE:driving`（開車中）→ 只用說的唸出店名，**不呈現卡片**，最後說：「主人，依您的動線您似乎在開車，我用說的給您聽。如果您要看的話，告訴我一聲，我把資料呈現在畫面上，您稍後有空再看。」
+  ✦ `GPS_MODE:walking` 或 `GPS_MODE:stationary`（步行或靜止）→ 說出結果，並問「需要我幫您訂位嗎？」，主人說要看卡片 → 用 generate_report 呈現
+  ✦ 主人開車時說「好」「要看」「呈現出來」→ 立刻呼叫 generate_report 把餐廳清單做成卡片
 - search_restaurants 回傳含 `map_available:` 代表資料庫查不到，此時阿福說「我這邊查不到，要幫您在地圖上找嗎？」；主人說「要」「好」「開地圖」→ 呼叫 open_map 工具，傳入 query/lat/lng；**絕不自動開地圖**，一定要等主人同意
 - 主人確認要訂餐 → 用 search_restaurants 找選項（已有結果直接說），說出：「有幾家選擇：中式的XX、日式的YY、西式的ZZ，我幫您電話確認有沒有位置，要從哪家開始？」
 - 主人選定餐廳後 → 用 make_call 幫主人撥電話（需要主人提供或從記憶裡找電話）
@@ -3271,6 +3275,17 @@ async def chat(req: ChatReq,
                         except Exception as _oe:
                             print(f"[overpass error] {_oe}")
 
+                    # 3. 偵測主人當前移動狀態
+                    _gps_mode = "unknown"
+                    try:
+                        _mode_row = c.execute(
+                            "SELECT mode FROM location_log ORDER BY id DESC LIMIT 1"
+                        ).fetchone()
+                        if _mode_row: _gps_mode = _mode_row[0]
+                    except Exception:
+                        pass
+                    _is_driving = _gps_mode == "driving"
+
                     map_query = f"{cuisine} 餐廳 {location}" if cuisine else f"餐廳 {location}"
                     if rest_hits:
                         lines = []
@@ -3279,12 +3294,19 @@ async def chat(req: ChatReq,
                             if _rh['address']: line += f"（{_rh['address']}）"
                             if _rh['phone']: line += f" ☎ {_rh['phone']}"
                             lines.append(line)
-                        res = f"主人，{location}附近{cuisine}餐廳（{radius_m}m 內，共 {len(rest_hits)} 家）：\n" + "\n".join(lines)
-                        res += "\n\n需要幫您撥電話訂位嗎？"
-                        # 找到結果就不開地圖，阿福直接唸出來即可（零介面原則）
+                        restaurant_list = "\n".join(lines)
+                        res = (
+                            f"[GPS_MODE:{_gps_mode}]\n"
+                            f"{location}附近{cuisine}餐廳（{radius_m}m 內，共 {len(rest_hits)} 家）：\n"
+                            f"{restaurant_list}"
+                        )
                     else:
                         # 找不到：提供地圖選項但讓 LLM 問主人，不自動跳出
-                        res = f"主人，我這邊資料庫查不到附近的{cuisine}。要我幫您在地圖上找嗎？（map_available: query={map_query}, lat={search_lat or ''}, lng={search_lng or ''}）"
+                        res = (
+                            f"[GPS_MODE:{_gps_mode}]\n"
+                            f"資料庫查不到附近的{cuisine}。"
+                            f"（map_available: query={map_query}, lat={search_lat or ''}, lng={search_lng or ''}）"
+                        )
                 elif b.name == "make_call":
                     phone = inp.get("phone","")
                     name = inp.get("name","")
