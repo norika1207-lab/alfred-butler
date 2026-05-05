@@ -166,9 +166,68 @@ class AlfredAPI {
         _ = try await session.data(for: req)
     }
 
+    // MARK: - Health Vitals
+    func pushHealthVitals(
+        heartRate: Int?, spo2: Double?,
+        wristOn: Bool, activity: String
+    ) async throws -> HealthVitalsResponse {
+        var req = URLRequest(url: URL(string: "\(base)/health/vitals")!)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = AuthManager.shared.token {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        var body: [String: Any] = ["wrist_on": wristOn, "activity": activity]
+        if let hr = heartRate { body["heart_rate"] = hr }
+        if let sp = spo2 { body["spo2"] = sp }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, _) = try await session.data(for: req)
+        return try JSONDecoder().decode(HealthVitalsResponse.self, from: data)
+    }
+
+    func healthCheckinAck() async throws {
+        var req = URLRequest(url: URL(string: "\(base)/health/checkin-ack")!)
+        req.httpMethod = "POST"
+        if let token = AuthManager.shared.token {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        _ = try await session.data(for: req)
+    }
+
+    func reportFallDetected(lat: Double? = nil, lng: Double? = nil) async throws -> HealthVitalsResponse {
+        var req = URLRequest(url: URL(string: "\(base)/health/fall-detected")!)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = AuthManager.shared.token {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        var body: [String: Any] = [:]
+        if let lat { body["lat"] = lat }
+        if let lng { body["lng"] = lng }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, _) = try await session.data(for: req)
+        return try JSONDecoder().decode(HealthVitalsResponse.self, from: data)
+    }
+
+    func getHealthStatus() async throws -> HealthStatusResponse {
+        try await get("/health/status")
+    }
+
+    func getEmergencyContacts() async throws -> [EmergencyContact] {
+        try await get("/emergency/contacts")
+    }
+
+    func getMedications() async throws -> [MedicationItem] {
+        try await get("/medications")
+    }
+
     // MARK: - Generic
     func get<T: Decodable>(_ path: String) async throws -> T {
-        let (data, _) = try await session.data(from: URL(string: "\(base)\(path)")!)
+        var req = URLRequest(url: URL(string: "\(base)\(path)")!)
+        if let token = AuthManager.shared.token {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, _) = try await session.data(for: req)
         return try JSONDecoder().decode(T.self, from: data)
     }
 }
