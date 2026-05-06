@@ -2747,11 +2747,29 @@ def _maybe_handle_file_search_fastpath(message: str, current_user=None, scene=No
 
     _prewarm_drive_texts(top, limit=3)
 
-    # 單一候選 → 直接讀取，不出清單不問確認
+    # 單一候選：
+    # - 有讀取意圖（念/讀/摘要/說什麼/是什麼）→ 直接讀
+    # - 只有「找」→ 只報告在哪，存進 pending 等主人下一步指令
     if len(top) == 1:
-        result = _analyze_candidate(top[0], current_user)
-        if result:
-            return result
+        _read_intent_words = ["念", "唸", "讀", "摘要", "重點", "說什麼", "是什麼",
+                              "怎麼說", "寫什麼", "裡面", "內容", "分析", "整理"]
+        has_read_intent = _summary_intent(msg) or any(w in msg for w in _read_intent_words)
+        if has_read_intent:
+            result = _analyze_candidate(top[0], current_user)
+            if result:
+                return result
+        else:
+            # 只找，不讀 — 告訴主人找到了，存進 pending
+            _uid_key = (current_user or "__anon__")
+            _pending_file_list[_uid_key] = {"candidates": top[:1], "ts": _time.time()}
+            _last_analyzed[_uid_key] = {"name": top[0]["name"], "ts": _time.time()}
+            src = top[0]["source"]
+            drv = top[0].get("drive", "")
+            loc = f"{src}／{drv}" if drv else src
+            return {
+                "text": f"主人，找到了：「{top[0]['name']}」（{loc}）。",
+                "card": None, "action": None
+            }
 
     lines = []
     card_rows = []
@@ -3290,9 +3308,63 @@ def _maybe_handle_doc_selection(message: str, current_user=None):
                 pass
             if fresh:
                 fresh.sort(key=lambda x: -x["score"])
-                # 明確搜到 ≤2 份 → 直接讀最佳
                 if len(fresh) <= 2:
                     return _analyze_candidate(fresh[0], current_user)
+
+    # ── 路徑 C：純摘要意圖，沒有文件名 → 用 _last_analyzed 重讀上一份 ──────
+    # 例：「念出摘要」「讀重點」「再念一遍」— 不問主人是哪份
+    if has_summary and not _file_search_tokens(msg):
+        result = _reanalyze_last_file(current_user)
+        if result:
+            return result
+
+    return None
+
+
+def _reanalyze_last_file(current_user=None) -> dict | None:
+    """從 _last_analyzed 找上一份被操作過的文件，重新讀取分析。
+    讓主人說「念出摘要」「讀重點」「再念一遍」時不需要重複說檔名。
+    """
+    import sqlite3 as _sq_ra
+    uid = current_user or "__anon__"
+    last = _last_analyzed.get(uid, {})
+    if not last:
+        return None
+    if _time.time() - last.get("ts", 0) > 1800:  # 30 分鐘內有效
+        return None
+    name = last.get("name", "")
+    if not name:
+        return None
+
+    # 先找 Drive
+    try:
+        rows = _query_user_then_shared(
+            current_user,
+            "SELECT id, name, mime_type, drive_name FROM drive_index WHERE name=? LIMIT 1",
+            (name,)
+        )
+        if rows:
+            item = {"source": "Google Drive", "id": rows[0][0], "name": rows[0][1],
+                    "mime": rows[0][2] or "", "drive": rows[0][3] or ""}
+            return _analyze_candidate(item, current_user)
+    except Exception:
+        pass
+
+    # 再找上傳的文件（用戶 DB + 共用 DB）
+    for db_path in ([user_db_path(current_user)] if current_user else []) + [DB]:
+        try:
+            conn = _sq_ra.connect(db_path)
+            row = conn.execute(
+                "SELECT id, filename, original_name, mime_type FROM files "
+                "WHERE original_name=? LIMIT 1", (name,)
+            ).fetchone()
+            conn.close()
+            if row:
+                item = {"source": "阿福保管", "id": row[0], "name": row[2] or row[1],
+                        "mime": row[3] or ""}
+                return _analyze_candidate(item, current_user)
+        except Exception:
+            pass
 
     return None
 
