@@ -3038,6 +3038,99 @@ def _quick_multi_doc_summary(candidates: list, current_user=None) -> str:
     return "\n\n".join(lines)
 
 
+def _maybe_handle_recent_upload(message: str, current_user=None) -> dict | None:
+    """
+    偵測「剛傳的那份」「我剛上傳的」「剛剛傳給你的文件」「那份我傳的」，
+    直接找最近一筆 files 記錄並分析，不需要主人說檔名。
+    """
+    msg = (message or "").strip()
+
+    # 觸發詞：含「剛」+ 上傳相關 + 讀取意圖
+    _recent_triggers = [
+        "剛傳", "剛才傳", "剛剛傳", "我剛傳", "我傳的", "傳給你的",
+        "剛上傳", "剛才上傳", "我上傳的", "那份傳的", "剛傳過來",
+    ]
+    _read_intent = [
+        "看", "讀", "念", "分析", "摘要", "重點", "說", "整理",
+    ]
+
+    has_recent = any(t in msg for t in _recent_triggers)
+    # 也接受 [file_id=N] 這種 programmatic 上傳通知
+    import re as _re_up
+    fid_match = _re_up.search(r'\[file_id=(\d+)\]', msg)
+
+    if not has_recent and not fid_match:
+        return None
+
+    # 找最新上傳的檔案（先查用戶 DB，再查共用 DB）
+    import sqlite3 as _sq_ru
+    try:
+        def _find_file(conn):
+            if fid_match:
+                return conn.execute(
+                    "SELECT id, filename, original_name, mime_type FROM files WHERE id=? LIMIT 1",
+                    (int(fid_match.group(1)),)
+                ).fetchone()
+            return conn.execute(
+                "SELECT id, filename, original_name, mime_type FROM files ORDER BY ts DESC LIMIT 1"
+            ).fetchone()
+
+        row = None
+        # 先查用戶個人 DB
+        if current_user:
+            try:
+                _uc = _sq_ru.connect(user_db_path(current_user))
+                row = _find_file(_uc)
+                _uc.close()
+            except Exception:
+                pass
+        # fallback 查共用 DB
+        if not row:
+            _sc = _sq_ru.connect(DB)
+            row = _find_file(_sc)
+            _sc.close()
+
+        if not row:
+            return {"text": "主人，我這邊目前沒有收到任何上傳的文件。您可以直接傳給我，我立刻讀。",
+                    "card": None, "action": None}
+
+        file_id, stored, orig_name, mime = row
+        name = orig_name or stored
+
+        # 直接讀取並分析
+        from pathlib import Path as _Path
+        dest = f"{FILE_DIR}/{stored}"
+        if not _Path(dest).exists():
+            return {"text": f"主人，找到「{name}」的記錄，但檔案找不到了。請重新傳一次。",
+                    "card": None, "action": None}
+
+        text = _extract_text_from_file(dest, mime or "", name)
+        if not text or len(text.strip()) < 30 or text.startswith("["):
+            return {"text": f"主人，收到「{name}」，但無法讀取內容（可能是圖片格式或加密文件）。",
+                    "card": None, "action": None}
+
+        summary = _quick_spoken_document_summary(text, name)
+        if not summary:
+            summary = _clean_spoken_summary(text[:900])
+
+        # 記錄這次分析
+        uid = current_user or "__anon__"
+        _last_analyzed[uid] = {"name": name, "ts": _time.time()}
+
+        # 找相關文件
+        related = _find_related_docs(name, current_user, limit=3)
+        hint = ""
+        if related:
+            hint = f"\n\n（另外找到 {len(related)} 份可能相關的文件，需要的話說一聲。）"
+
+        return {
+            "text": f"主人，我讀了「{name}」，重點是：\n\n{summary}{hint}",
+            "card": None, "action": None
+        }
+    except Exception as _e:
+        return {"text": f"主人，讀取文件時發生錯誤：{_e}", "card": None, "action": None}
+
+
 def _maybe_handle_related_docs_request(message: str, current_user=None) -> dict | None:
     """
     偵測「如果還有相關文件」「有沒有其他」「還有哪些」「隨便念重點」這類複合請求。
@@ -3400,6 +3493,11 @@ async def chat(req: ChatReq,
         return _fp_return(_attendance)
 
     # 候選清單選取
+    # 剛上傳的文件（「剛傳的那份」「我剛傳給你的」）
+    _recent_upload = _maybe_handle_recent_upload(req.message, current_user)
+    if _recent_upload is not None:
+        return _fp_return(_recent_upload)
+
     # 相關文件複合請求（「如果還有文件，告訴我哪些然後念重點」）
     _related_req = _maybe_handle_related_docs_request(req.message, current_user)
     if _related_req is not None:
@@ -9605,6 +9703,8 @@ async def upload_file(file: UploadFile = File(...),
                       tags: str = Form(""),
                       user_id: str = Depends(require_user)):
     """Upload a file — 上傳後背景自動 AI 分析建立語意索引。"""
+    global _current_user_id
+    _current_user_id = user_id  # 確保 db() 寫入正確的用戶 DB
     import uuid, pathlib
     ext = pathlib.Path(file.filename or "file").suffix
     stored_name = f"{uuid.uuid4().hex}{ext}"
