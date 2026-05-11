@@ -1353,6 +1353,12 @@ TOOLS = [
          "draft_id": {"type": "string", "description": "要寄出的草稿 ID（send_draft 模式）"}
      }, "required": ["mode"]}},
 
+    {"name": "search_products", "description": "在台灣電商（momo）搜尋商品比價。主人說「幫我找XX」「查一下XX多少錢」「比價XX」「買XX」時使用。不走LLM，純演算法。",
+     "input_schema": {"type": "object", "properties": {
+         "query": {"type": "string", "description": "搜尋關鍵字，例如「AirPods Pro」「電動牙刷」"},
+         "limit": {"type": "integer", "description": "最多幾筆，預設 4"}
+     }, "required": ["query"]}},
+
     {"name": "get_weather", "description": "查詢天氣預報，主人說「天氣怎麼樣」「今天會下雨嗎」「需要帶傘嗎」時使用",
      "input_schema": {"type": "object", "properties": {
          "city": {"type": "string", "description": "城市，例如「台北」「Tokyo」，留空用主人目前城市"}
@@ -2669,6 +2675,62 @@ def _maybe_handle_math_fastpath(message: str) -> dict | None:
         }
     }
 
+_SHOP_BUY_KW = ["買", "購買", "訂購", "下單", "比價", "最便宜", "哪裡買", "多少錢", "幾塊", "幾元"]
+_SHOP_PRODUCT_KW = [
+    "牙刷", "耳機", "手機", "筆電", "平板", "電視", "冰箱", "冷氣", "洗碗機", "洗衣機",
+    "掃地機", "吸塵器", "咖啡機", "氣炸鍋", "電鍋", "電熱水壺", "吹風機", "充電器",
+    "鍵盤", "滑鼠", "螢幕", "相機", "鏡頭", "switch", "Switch", "PS5", "Xbox",
+    "AirPods", "airpods", "iPhone", "iphone", "iPad", "ipad", "MacBook", "macbook",
+    "醬油", "米", "麵條", "零食", "餅乾", "飲料", "保養", "面膜", "乳液", "防曬",
+    "維他命", "營養品", "運動鞋", "球鞋", "衣服", "包包", "行李箱",
+]
+_SHOP_NON_FILE_CHECK = ["合約", "PDF", "報告", "會議記錄", "文件", "提案", "企劃"]
+
+
+def _is_shopping_intent(message: str) -> tuple[bool, str]:
+    """回傳 (是否購物意圖, 搜尋關鍵字)"""
+    msg = message or ""
+    has_buy = any(k in msg for k in _SHOP_BUY_KW)
+    has_product = any(k in msg for k in _SHOP_PRODUCT_KW)
+    is_doc = any(k in msg for k in _SHOP_NON_FILE_CHECK)
+    if is_doc or not (has_buy or has_product):
+        return False, ""
+    query = msg
+    for prefix in ["幫我找", "幫我買", "幫我查", "買一個", "買個", "一個", "一台", "一條", "一瓶", "一箱", "訂購", "找一下", "找個", "查一下", "買"]:
+        query = query.replace(prefix, "").strip()
+    for suffix in ["多少錢", "哪裡買", "最便宜", "比價", "價格", "幾塊", "幾元"]:
+        query = query.replace(suffix, "").strip()
+    query = query.strip("，。？?！! 的")
+    return bool(query), query
+
+
+async def _maybe_handle_shopping_fastpath(message: str):
+    """偵測購物/比價意圖，不走 LLM，直接回傳結構化商品結果。"""
+    is_shop, query = _is_shopping_intent(message)
+    if not is_shop:
+        return None
+    try:
+        from shop_service import search_products as _sp
+        products = await _sp(query, limit=4)
+    except Exception:
+        return None
+    if not products:
+        return {
+            "text": f"主人，momo 上暫時找不到「{query}」的商品，換個關鍵字試試。",
+            "card": None, "action": None
+        }
+    lines = [f"主人，找到「{query}」的商品（依價格排序）："]
+    for i, p in enumerate(products[:3], 1):
+        disc = f"（省{p['discount_pct']}%）" if p.get("discount_pct") else ""
+        rat = f" ⭐{p['rating']}" if p.get("rating") else ""
+        lines.append(f"{i}. {p['name'][:28]}　{p['price']:,}元{disc}{rat}")
+    return {
+        "text": "\n".join(lines),
+        "card": {"type": "product_list", "products": products[:4]},
+        "action": None
+    }
+
+
 def _maybe_handle_file_search_fastpath(message: str, current_user=None, scene=None):
     msg = message or ""
     scene = scene or _get_current_scene(current_user)
@@ -3710,6 +3772,11 @@ async def chat(req: ChatReq,
     _doc_sel = _maybe_handle_doc_selection(req.message, current_user)
     if _doc_sel is not None:
         return _fp_return(_doc_sel)
+
+    # 購物比價快路徑（先於 file search，避免「幫我找電動牙刷」被誤判成文件搜尋）
+    _shop_res = await _maybe_handle_shopping_fastpath(req.message)
+    if _shop_res is not None:
+        return _fp_return(_shop_res)
 
     # 檔案查詢快路徑要先於「指定檔案摘要」：模糊合約/報告先列候選，不直接亂念第一份。
     _file_search = _maybe_handle_file_search_fastpath(req.message, current_user, _scene)
@@ -4800,6 +4867,27 @@ async def chat(req: ChatReq,
                         else:
                             ok = telegram_service.send_message(chat_id, msg_text)
                             res = "Telegram 訊息已發送" if ok else "Telegram 訊息發送失敗"
+                elif b.name == "search_products":
+                    from shop_service import search_products as _shop_search, format_for_alfred as _shop_fmt
+                    _sq = inp.get("query", "")
+                    _slim = int(inp.get("limit", 4))
+                    try:
+                        _sprods = await _shop_search(_sq, limit=_slim)
+                        if _sprods:
+                            _lines = [f"找到 {len(_sprods)} 筆「{_sq}」商品（momo，價格由低到高）："]
+                            for _i, _p in enumerate(_sprods[:4], 1):
+                                _disc = f"（省{_p['discount_pct']}%）" if _p.get("discount_pct") else ""
+                                _rat = f" ⭐{_p['rating']}" if _p.get("rating") else ""
+                                _lines.append(f"{_i}. {_p['name'][:30]}　{_p['price']:,}元{_disc}{_rat}")
+                                _lines.append(f"   🛒 {_p['buy_url']}")
+                                if _p.get("image_url"):
+                                    _lines.append(f"   🖼 {_p['image_url']}")
+                            res = "\n".join(_lines)
+                        else:
+                            res = f"momo 上找不到「{_sq}」，換個關鍵字試試。"
+                    except Exception as _se:
+                        res = f"商品搜尋暫時失敗：{_se}"
+
                 elif b.name == "get_weather":
                     # 永遠 server 端真查。實際資料丟給 LLM，讓阿福以體貼管家口氣轉述。
                     _wc = inp.get("city", "")
@@ -9153,7 +9241,7 @@ _MESSAGING_TOOL_NAMES = {
     "record_expense", "create_calendar_event", "lookup_contact",
     "search_web", "save_relationship", "save_food_record",
     "find_anything",
-    "get_weather", "get_market_info", "search_news",
+    "search_products", "get_weather", "get_market_info", "search_news",
     "check_email", "send_email",
     "note_promise", "people_prefs", "manage_anniversary",
     "attendance", "family_location",
@@ -9283,6 +9371,27 @@ async def _run_alfred_for_messaging(text: str) -> str:
                         )
                     else:
                         res = f"索引裡找不到「{_fa_q}」相關的文件。"
+
+            elif b.name == "search_products":
+                from shop_service import search_products as _shop_search
+                _sq = inp.get("query", "")
+                _slim = int(inp.get("limit", 4))
+                try:
+                    _sprods = await _shop_search(_sq, limit=_slim)
+                    if _sprods:
+                        _lines = [f"找到 {len(_sprods)} 筆「{_sq}」商品（momo，價格由低到高）："]
+                        for _i, _p in enumerate(_sprods[:4], 1):
+                            _disc = f"（省{_p['discount_pct']}%）" if _p.get("discount_pct") else ""
+                            _rat = f" ⭐{_p['rating']}" if _p.get("rating") else ""
+                            _lines.append(f"{_i}. {_p['name'][:30]}　{_p['price']:,}元{_disc}{_rat}")
+                            _lines.append(f"   🛒 {_p['buy_url']}")
+                            if _p.get("image_url"):
+                                _lines.append(f"   🖼 {_p['image_url']}")
+                        res = "\n".join(_lines)
+                    else:
+                        res = f"momo 上找不到「{_sq}」，換個關鍵字試試。"
+                except Exception as _se:
+                    res = f"商品搜尋暫時失敗：{_se}"
 
             elif b.name == "get_weather":
                 _wc = inp.get("city", "")
