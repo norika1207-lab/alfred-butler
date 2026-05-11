@@ -467,3 +467,27 @@ TEST_REPORTS.md
 50 calls（5 iter × 10 prompts）— 命中率 82%，0 errors，平均延遲 6.7s
 
 低命中類別：`show_office` 60%、`show_translate` 60%、`show_family` 0%（資料空時 LLM 走文字引導路徑，而非開 sheet）
+
+---
+
+## extras/ — 商品索引擴充工具
+
+`extras/` 資料夾是核心引擎以外的 **規模擴張工具**，不影響主程式運作，只在需要把索引從數千筆推到 10 萬+ 時使用。
+
+```
+extras/
+├── indexer/
+│   ├── worker.py           20-Agent 並發爬蟲（正確版，每關鍵字最多 10,000 筆）
+│   ├── wide_worker.py      廣度爬蟲第一批（500+ 關鍵字 × 200 筆 = 10 萬+）
+│   ├── wide_worker2.py     廣度爬蟲第二批（再加 1,000 關鍵字，補齊至 10 萬）
+│   ├── bulk_index.py       暴力批量索引（每關鍵字 40-60 筆，2,000 個關鍵字）
+│   ├── mega_crawl.py       翻頁式大量索引（PChome 單字 25,000 筆 × 100 頁）
+│   ├── migrate_to_pg.py    SQLite → PostgreSQL 一次性遷移，含 price_history 種子
+│   ├── pg_schema.sql       PostgreSQL schema（支援 price_history、JSONB、tsvector）
+│   └── auto_crawl.sh       每日自動爬蟲排程（cron 用）
+└── scrapers/
+    ├── crowdfunding_scraper.py  wabay + flyingV 領先指標爬蟲（預測 3-12 個月後熱銷品）
+    └── taobao_scraper.py        淘寶價格/銷量爬蟲（需 TAOBAO_APP_KEY + TAOBAO_APP_SECRET）
+```
+
+詳細說明見 [`extras/README.md`](extras/README.md)。
