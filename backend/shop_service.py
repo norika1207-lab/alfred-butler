@@ -1,7 +1,7 @@
 """
 shop_service.py — 台灣電商比價引擎
 純演算法，零 LLM。抓商品名稱、價格、折扣、規格、一張圖。
-目前支援：momo、PChome 24h、蝦皮（需登入 cookies）
+目前支援：momo、PChome 24h、蝦皮（需登入 cookies）、松果購物 (pcone.com.tw)、博客來
 """
 import re
 import json
@@ -9,6 +9,8 @@ import asyncio
 import httpx
 from typing import Optional
 from pathlib import Path
+
+from scrapers.books_scraper import search_books
 
 # 蝦皮 session cookies 存放路徑（登入後由 /api/shop/shopee-login 寫入）
 _SHOPEE_COOKIE_FILE = Path(__file__).parent.parent / "data" / "shopee_session.json"
@@ -257,10 +259,9 @@ async def search_shopee(query: str, limit: int = 6) -> list[dict]:
 # ── 跨站整合 ──────────────────────────────────────────────────────────────────
 
 async def search_products(query: str, sites: Optional[list[str]] = None, limit: int = 6) -> list[dict]:
-    """跨平台搜尋，momo + PChome + 蝦皮（有 session 時）同時跑，依價格排序"""
+    """跨平台搜尋，momo + PChome + 博客來 + 蝦皮（有 session 時）同時跑，依價格排序"""
     if sites is None:
-        # 蝦皮只在有 session 時加入
-        sites = ["momo", "pchome"]
+        sites = ["momo", "pchome", "books"]
         if _load_shopee_cookies():
             sites.append("shopee")
     tasks = []
@@ -268,6 +269,8 @@ async def search_products(query: str, sites: Optional[list[str]] = None, limit: 
         tasks.append(search_momo(query, limit))
     if "pchome" in sites:
         tasks.append(search_pchome(query, limit))
+    if "books" in sites:
+        tasks.append(search_books(query, limit))
     if "shopee" in sites:
         tasks.append(search_shopee(query, limit))
 
