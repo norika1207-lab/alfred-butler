@@ -172,32 +172,37 @@ struct CardView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 20) {
-                    Text(card.content ?? "")
-                        .font(.system(size: 15))
-                        .foregroundColor(Color(hex: "#e8d5b7"))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                if card.type == "product_list", let products = card.products, !products.isEmpty {
+                    ProductListCardView(products: products)
+                } else {
+                    ScrollView {
+                        VStack(spacing: 20) {
+                            Text(card.content ?? "")
+                                .font(.system(size: 15))
+                                .foregroundColor(Color(hex: "#e8d5b7"))
+                                .frame(maxWidth: .infinity, alignment: .leading)
 
-                    // OAuth 授權卡片：顯示「前往授權」按鈕，點下開外部 Safari
-                    if let urlStr = card.url, let url = URL(string: urlStr) {
-                        Button {
-                            UIApplication.shared.open(url)
-                        } label: {
-                            Text(card.buttonTitle ?? "前往授權")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(Color(hex: "#090909"))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(Color(hex: "#c9a84c"))
-                                .cornerRadius(10)
+                            if let urlStr = card.url, let url = URL(string: urlStr) {
+                                Button {
+                                    UIApplication.shared.open(url)
+                                } label: {
+                                    Text(card.buttonTitle ?? "前往授權")
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .foregroundColor(Color(hex: "#090909"))
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 14)
+                                        .background(Color(hex: "#c9a84c"))
+                                        .cornerRadius(10)
+                                }
+                            }
                         }
+                        .padding(20)
                     }
                 }
-                .padding(20)
             }
             .background(Color(hex: "#13110e"))
-            .navigationTitle(card.title ?? "")
+            .navigationTitle(card.type == "product_list" ? "比價結果" : (card.title ?? ""))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -206,6 +211,117 @@ struct CardView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - 商品比價卡片
+
+struct ProductListCardView: View {
+    let products: [ProductItem]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                ForEach(Array(products.enumerated()), id: \.offset) { _, product in
+                    ProductRowView(product: product)
+                }
+            }
+            .padding(16)
+        }
+    }
+}
+
+struct ProductRowView: View {
+    let product: ProductItem
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            // 商品圖
+            Group {
+                if let imgStr = product.imageUrl, let url = URL(string: imgStr) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let img):
+                            img.resizable().scaledToFill()
+                        case .failure:
+                            placeholderImage
+                        default:
+                            Color(hex: "#1e1c18")
+                                .overlay(ProgressView().tint(Color(hex: "#c9a84c")))
+                        }
+                    }
+                } else {
+                    placeholderImage
+                }
+            }
+            .frame(width: 90, height: 90)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            // 商品資訊
+            VStack(alignment: .leading, spacing: 4) {
+                Text(product.name ?? "")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Color(hex: "#e8d5b7"))
+                    .lineLimit(2)
+
+                HStack(spacing: 6) {
+                    Text("\(product.price.map { String(format: "%d", $0) } ?? "-") 元")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundColor(Color(hex: "#c9a84c"))
+
+                    if let disc = product.discountPct {
+                        Text("省\(disc)%")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(Color(hex: "#d84a3a"))
+                            .clipShape(Capsule())
+                    }
+                }
+
+                if let rating = product.rating, let count = product.reviewCount {
+                    Text("⭐ \(rating)（\(count)則評價）")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(hex: "#888070"))
+                }
+
+                if let site = product.site {
+                    Text(site.uppercased())
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Color(hex: "#888070"))
+                }
+            }
+
+            Spacer()
+
+            // 購買按鈕
+            if let urlStr = product.buyUrl, let url = URL(string: urlStr) {
+                Button {
+                    UIApplication.shared.open(url)
+                } label: {
+                    Text("前往\n購買")
+                        .font(.system(size: 12, weight: .semibold))
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(Color(hex: "#090909"))
+                        .frame(width: 52, height: 44)
+                        .background(Color(hex: "#c9a84c"))
+                        .cornerRadius(8)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(hex: "#1a1813"))
+        .cornerRadius(12)
+    }
+
+    private var placeholderImage: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(Color(hex: "#1e1c18"))
+            .overlay(
+                Image(systemName: "cart")
+                    .foregroundColor(Color(hex: "#888070"))
+                    .font(.system(size: 24))
+            )
     }
 }
 
