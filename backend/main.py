@@ -1077,10 +1077,12 @@ def _save_conv_turn(role: str, content: str):
     if role == "assistant" and len(text) < 30 and any(n in text for n in _CONV_NOISE):
         return
     c = db()
-    # 加時間戳前綴，讓 LLM 知道對話時序
+    # 加時間戳前綴，讓 LLM 知道對話時序（先去除 LLM 回應自帶的重複前綴）
+    import re as _re_ts
+    clean_text = _re_ts.sub(r'^\[\d{1,2}:\d{2}\]\s*', '', text)
     ts_prefix = datetime.now().strftime("[%H:%M] ")
     c.execute("INSERT INTO conversation_log (role, content, ts) VALUES (?, ?, ?)",
-              (role, ts_prefix + text[:3900], datetime.now().isoformat()))
+              (role, ts_prefix + clean_text[:3900], datetime.now().isoformat()))
     # 保留最新 100 筆（50 輪對話，60 分鐘內不會爆）
     c.execute("DELETE FROM conversation_log WHERE id NOT IN "
               "(SELECT id FROM conversation_log ORDER BY id DESC LIMIT 100)")
@@ -2391,6 +2393,10 @@ def _explicit_file_search_intent(message: str) -> bool:
     if any(k in msg for k in source_terms) and any(k in msg for k in search_terms):
         return True
     if any(k in msg for k in ["找那份", "找一份", "找這份", "找那個", "找一下", "去找", "幫我找"]):
+        return True
+    # 「找X」「查X」裸意圖 — 只要訊息以「找/查」開頭且夠長，視為搜尋意圖
+    # （非檔案類會被上層 _should_skip_file_fastpath 過濾）
+    if any(msg.startswith(k) for k in ["找", "查"]) and len(msg) > 2:
         return True
     # 「那個XXX是多少/是什麼/說什麼/怎麼說」— 內容問題，視為搜尋意圖
     content_q_words = ["是多少", "是什麼", "說什麼", "怎麼說", "有什麼", "多少錢", "寫什麼", "裡面是"]
@@ -3945,6 +3951,7 @@ async def chat(req: ChatReq,
 - 只有主人必須「看」內容時才提供視覺輸出：文件/合約/報告卡片、圖片/相簿、翻譯給對方看的大字、Google 授權或檔案上傳這類必要操作。
 - 不要為了展示資訊而呼叫 show_family / show_office / show_translate / show_attendance；這些日常功能只口頭回覆。
 - 需要文件、圖片、上傳、授權時才呼叫對應 tool；一次只呼叫一個。
+- 天氣查詢結果必須直接說出氣溫與天氣狀況，例如「台北今天晴天，28度，明天有雨，建議帶傘」。絕對禁止說「裝置會顯示」「iOS 會顯示天氣」，天氣資料要口頭說完整。
 
 繁體中文，稱呼「主人」，說話像在說話不像在打字，不說廢話。
 **絕對不要編造任何家人、同事、朋友的人名**（不要說「小芸」「小雲」「小明」等虛構名字）。如果不知道對方名字，用「您家人」「您同事」「對方」等通用稱呼。
