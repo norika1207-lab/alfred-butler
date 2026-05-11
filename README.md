@@ -21,7 +21,7 @@
 
 ### 後端
 - **Server**: `https://YOUR_BACKEND_HOST`
-- **SSH**: `ssh YOUR_SERVER`（alias，即 `ssh root@YOUR_SERVER_IP`）
+- **SSH**: `ssh YOUR_SERVER`（alias，即 `ssh root@YOUR_SERVER`）
 - **Service**: `systemctl restart alfred`（crash auto-restart，SIGHUP-safe）
 - **Code**: `/opt/alfred/backend/main.py`（7500+ 行）
 - **LLM**: Google Gemini 2.0 Flash

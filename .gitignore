@@ -9,10 +9,20 @@ __pycache__/
 nohup.out
 
 # 敏感憑證
+.env
+.env.*
 backend/.env
+*.pem
+*.key
+*.p12
+client_secret*.json
+service_account*.json
+credentials*.json
+token*.json
 
 # 備份檔
 *.bak*
+*.bak_*
 
 # 資料目錄（DB、個資、索引，不進 git）
 data/

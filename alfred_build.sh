@@ -1,12 +1,12 @@
 #!/bin/bash
 # 阿福 iOS Build Script
 # 在 Mac 上執行：在 Claude Code 輸入 ! bash /tmp/alfred_build.sh
-# 或：! curl -s root@YOUR_SERVER_IP:/tmp/alfred_build.sh | bash
+# 或：! curl -s root@YOUR_SERVER:/tmp/alfred_build.sh | bash
 
 set -e
 
 XCODE_PROJ="/Users/YOUR_USER/Dropbox/Alfred/Alfred"
-VPS="root@YOUR_SERVER_IP"
+VPS="root@YOUR_SERVER"
 VPS_SRC="/opt/alfred/ios_app/Alfred"
 
 echo "=== Alfred iOS Build ==="

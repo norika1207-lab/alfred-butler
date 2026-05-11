@@ -13,7 +13,7 @@ Auth:     無（單人 App，直接打）
 
 ## Git Repo（VPS 上）
 ```
-SSH:  root@YOUR_SERVER_IP
+SSH:  root@YOUR_SERVER
 Path: /opt/alfred/
 靈魂文件: /opt/alfred/ALFRED_SOUL.md
 API 文件: /opt/alfred/HANDOFF.md

@@ -15,7 +15,7 @@ Auth:     device JWT（iOS 由 /api/auth/device 取得；多數 API 需 Bearer t
 
 ## Git Repo（VPS 上）
 ```
-SSH:  root@YOUR_SERVER_IP
+SSH:  root@YOUR_SERVER
 Path: /opt/alfred/
 靈魂文件: /opt/alfred/ALFRED_SOUL.md
 API 文件: /opt/alfred/HANDOFF.md

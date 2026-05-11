@@ -13473,7 +13473,7 @@ li{{margin:6px 0;line-height:1.6;}}
 <h2>會議摘要</h2>
 <div class="summary">{summary_html}</div>
 {"<h2>待辦行動</h2><ul>" + actions_html + "</ul>" if actions_html else ""}
-<div class="footer">由阿福 Alfred 整理 · YOUR_BACKEND_HOST</div>
+<div class="footer">由阿福 Alfred 整理 · alfred.YOUR_SERVER_IP.nip.io</div>
 </body>
 </html>"""
     return Response(content=html, media_type="text/html")
@@ -13483,7 +13483,7 @@ li{{margin:6px 0;line-height:1.6;}}
 async def share_meeting_notes(note_id: int, req: dict):
     """Send meeting notes link to attendees via SMS."""
     phones = req.get("phones", [])
-    host = os.getenv("SERVER_HOST", "YOUR_BACKEND_HOST")
+    host = os.getenv("SERVER_HOST", "alfred.YOUR_SERVER_IP.nip.io")
     link = f"https://{host}/alfred/meeting/{note_id}"
 
     c = db()
@@ -13528,7 +13528,7 @@ def sms_pending():
 async def twiml_webhook(call_id: str):
     """Twilio calls this when call connects. Connects Media Streams to OpenAI Realtime bridge."""
     from twilio.twiml.voice_response import VoiceResponse
-    host = os.getenv("SERVER_HOST", "YOUR_BACKEND_HOST")
+    host = os.getenv("SERVER_HOST", "alfred.YOUR_SERVER_IP.nip.io")
     response = VoiceResponse()
     # Brief pause so the bridge has time to establish OpenAI connection
     response.pause(length=1)
@@ -13594,7 +13594,7 @@ def twilio_access_token(identity: str = "master"):
 def oauth_authorize():
     """Redirect user to Twilio's OAuth authorization page."""
     client_id = os.getenv("TWILIO_OAUTH_CLIENT_ID", "")
-    host = os.getenv("SERVER_HOST", "YOUR_BACKEND_HOST")
+    host = os.getenv("SERVER_HOST", "alfred.YOUR_SERVER_IP.nip.io")
     redirect_uri = f"https://{host}/alfred/api/oauth/callback"
     from fastapi.responses import RedirectResponse
     url = (f"https://oauth.twilio.com/v2/authorize"
@@ -13611,7 +13611,7 @@ async def oauth_callback(code: str = "", error: str = ""):
 
     client_id = os.getenv("TWILIO_OAUTH_CLIENT_ID", "")
     client_secret = os.getenv("TWILIO_OAUTH_CLIENT_SECRET", "")
-    host = os.getenv("SERVER_HOST", "YOUR_BACKEND_HOST")
+    host = os.getenv("SERVER_HOST", "alfred.YOUR_SERVER_IP.nip.io")
     redirect_uri = f"https://{host}/alfred/api/oauth/callback"
 
     import httpx as _httpx
