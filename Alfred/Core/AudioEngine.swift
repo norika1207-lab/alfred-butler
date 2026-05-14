@@ -10,6 +10,65 @@ class AudioEngine: NSObject {
     private var recordingURL: URL?
     private(set) var isRecording = false
 
+    // 2026-05-14 加 — VAD 簡單版 audio level monitoring
+    // conversational mode 用,主人講完話 1.5s 靜音自動觸發 callback。
+    private var vadTask: Task<Void, Never>?
+    var onSilenceDetected: (() -> Void)?  // ViewModel 設這個 callback 收 stop signal
+    var silenceThresholdDb: Float = -42.0  // 環境噪音之上的閾值
+    var silenceTriggerMs: Int = 1500       // 1.5s 靜音觸發
+    var maxRecordDurationMs: Int = 30_000  // 30s 上限
+
+    /// 拿當前 audio level (dB, -160 ~ 0)。錄音中才有意義。
+    func currentAudioLevel() -> Float? {
+        guard let r = recorder, isRecording else { return nil }
+        r.updateMeters()
+        return r.averagePower(forChannel: 0)
+    }
+
+    /// 啟動 VAD 監聽 (conversational mode 用)。
+    /// 連續 silenceTriggerMs 靜音 → call onSilenceDetected。
+    /// maxRecordDurationMs 到也會 trigger。
+    func startVAD() {
+        vadTask?.cancel()
+        let threshold = silenceThresholdDb
+        let triggerMs = silenceTriggerMs
+        let maxMs = maxRecordDurationMs
+        let stepMs = 100
+        vadTask = Task { @MainActor [weak self] in
+            // 等錄音 ramp up 0.5s 避免 mic 開啟瞬間誤觸
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            var silenceMs = 0
+            var elapsedMs = 500
+            while !Task.isCancelled {
+                guard let self, self.isRecording else { return }
+                let level = self.currentAudioLevel() ?? -160
+                if level < threshold {
+                    silenceMs += stepMs
+                } else {
+                    silenceMs = 0  // 講話 reset
+                }
+                if silenceMs >= triggerMs {
+                    NSLog("[VAD] silence %dms detected at level=%.1fdB, trigger stop", silenceMs, level)
+                    self.onSilenceDetected?()
+                    return
+                }
+                if elapsedMs >= maxMs {
+                    NSLog("[VAD] max %dms reached, trigger stop", maxMs)
+                    self.onSilenceDetected?()
+                    return
+                }
+                try? await Task.sleep(nanoseconds: UInt64(stepMs) * 1_000_000)
+                elapsedMs += stepMs
+            }
+        }
+    }
+
+    /// 關掉 VAD (push-to-talk 模式用,避免 VAD 跟手動 stop 撞)
+    func stopVAD() {
+        vadTask?.cancel()
+        vadTask = nil
+    }
+
     func startRecording() {
         #if !os(macOS)
         let session = AVAudioSession.sharedInstance()
@@ -47,6 +106,7 @@ class AudioEngine: NSObject {
         ]
         do {
             recorder = try AVAudioRecorder(url: url, settings: settings)
+            recorder?.isMeteringEnabled = true  // 2026-05-14 enable for VAD averagePower
             recorder?.record()
             isRecording = true
             recordingURL = url
@@ -61,6 +121,7 @@ class AudioEngine: NSObject {
     }
 
     func stopRecording() -> Data? {
+        stopVAD()  // 2026-05-14 ensure VAD task cancelled
         recorder?.stop()
         recorder = nil
         isRecording = false

@@ -3,7 +3,9 @@ import UIKit
 import UniformTypeIdentifiers
 
 // MARK: - 主畫面（零介面）
-// 全螢幕阿福。按住說話，放開阿福回答。就這樣。
+// 2026-05-14: 從 push-to-talk 改為 conversational mode toggle
+// 按一下 → 阿福主動歡迎 → 進入持續聆聽 → 自然多輪對話 → 再按一下退出
+// 介面保留不動,只改大頭像的互動模式。
 
 struct AlfredView: View {
     @StateObject private var vm = AlfredViewModel.shared
@@ -17,21 +19,15 @@ struct AlfredView: View {
             VStack(spacing: 0) {
                 Spacer()
 
-                // 阿福頭像（按住這裡說話）
-                AlfredAvatarView(state: vm.state, isPressing: isPressing)
+                // 阿福頭像（按一下進入/退出對話模式）
+                AlfredAvatarView(state: vm.state, isPressing: vm.conversationalMode)
                     .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { _ in
-                                if !isPressing {
-                                    isPressing = true
-                                    vm.startListening()
-                                }
-                            }
+                        TapGesture()
                             .onEnded { _ in
-                                if isPressing {
-                                    isPressing = false
-                                    vm.stopListening()
-                                }
+                                #if os(iOS)
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                #endif
+                                vm.toggleConversationalMode()
                             }
                     )
 

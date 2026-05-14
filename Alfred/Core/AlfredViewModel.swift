@@ -26,7 +26,89 @@ class AlfredViewModel: NSObject, ObservableObject {
     @Published var documentUploadRequest: DocumentUploadRequest? = nil
     @Published private(set) var currentSceneMode: String = "unknown"
 
+    // 2026-05-14 加 — Conversational mode:
+    // 按一下大頭像 toggle 此 flag。flag = true 時:
+    //   1) 阿福先說一句歡迎詞「主人您好,阿福會隨時為您服務,您有需要請隨時跟阿福說」
+    //   2) 阿福說完自動 startListening (continuous loop)
+    //   3) 每次 state 回 .idle 自動 restart listening (Combine subscriber 監聽)
+    //   4) 主人再按一下 toggle false → 退出 + 「好的主人,阿福先在這候命」
+    @Published var conversationalMode: Bool = false
+
+    private var conversationalCancellables: Set<AnyCancellable> = []
+
     enum AlfredState { case idle, listening, thinking, speaking }
+
+    override init() {
+        super.init()
+        setupConversationalLoop()
+    }
+
+    /// 監聽 state 變化:
+    /// - state 回 .idle + conversationalMode → 自動 restart listening
+    /// - state 進 .listening + conversationalMode → 啟動 VAD 偵測靜音自動 stop
+    private func setupConversationalLoop() {
+        $state
+            .removeDuplicates()
+            .sink { [weak self] newState in
+                guard let self else { return }
+                if newState == .listening && self.conversationalMode {
+                    // 進入聆聽 → 啟動 VAD,靜音 1.5s 自動 stop
+                    self.audio.onSilenceDetected = { [weak self] in
+                        guard let self else { return }
+                        NSLog("[Conversational] VAD triggered stop")
+                        self.stopListening()
+                    }
+                    self.audio.startVAD()
+                } else if newState == .idle && self.conversationalMode {
+                    // 回 .idle (TTS 完成 / 處理結束) → 自動 restart listening
+                    Task { @MainActor in
+                        // delay 一下,避免 TTS 餘音被當主人講話
+                        try? await Task.sleep(nanoseconds: 700_000_000)
+                        guard self.conversationalMode, self.state == .idle else { return }
+                        NSLog("[Conversational] auto-restart listening (state back to idle)")
+                        self.startListening()
+                    }
+                } else if newState != .listening {
+                    // 離開 listening (thinking/speaking) → 確保 VAD 停掉
+                    self.audio.stopVAD()
+                }
+            }
+            .store(in: &conversationalCancellables)
+    }
+
+    /// 大頭像 tap 入口 — toggle conversational mode
+    func toggleConversationalMode() {
+        if conversationalMode {
+            // exit
+            NSLog("[Conversational] exit (was %@)", String(describing: state))
+            conversationalMode = false
+            // 停掉錄音 (如果在錄)
+            if audio.isRecording {
+                _ = audio.stopRecording()
+            }
+            speechGeneration += 1
+            audio.stopPlayback()
+            state = .idle
+            Task {
+                await speakText("好的主人，阿福先在這候命。再叫我的時候按一下我。")
+                state = .idle
+            }
+        } else {
+            // enter — 阿福先說歡迎詞,TTS 完 .idle observer 會自動 startListening
+            NSLog("[Conversational] enter")
+            conversationalMode = true
+            speechGeneration += 1
+            audio.stopPlayback()
+            // 確保 alfredText 清空 (除非 onboarding)
+            if UserDefaults.standard.bool(forKey: "alfred_onboarded") {
+                alfredText = ""
+            }
+            Task {
+                await speakText("主人您好，阿福會隨時為您服務，您有需要請隨時跟阿福說。")
+                state = .idle  // 觸發 Combine sink → 自動 startListening
+            }
+        }
+    }
 
     var statusLine: String? {
         switch state {
