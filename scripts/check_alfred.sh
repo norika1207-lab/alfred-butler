@@ -21,6 +21,18 @@ HEALTH=$(curl -sS --max-time 3 http://127.0.0.1:9001/health 2>/dev/null)
 [ -n "$HEALTH" ] && echo "  health: $HEALTH"
 echo ""
 
+# Identity merge 狀態
+OWNER=$(sqlite3 "$DATA/auth.db" "SELECT canonical_user_id FROM identity_aliases GROUP BY canonical_user_id ORDER BY COUNT(*) DESC LIMIT 1" 2>/dev/null)
+ALIASES=$(sqlite3 "$DATA/auth.db" "SELECT COUNT(*) FROM identity_aliases WHERE canonical_user_id='$OWNER'" 2>/dev/null)
+OWNER_EMAIL=$(sqlite3 "$DATA/auth.db" "SELECT email FROM users WHERE id='$OWNER' LIMIT 1" 2>/dev/null)
+if [ -n "$OWNER" ]; then
+    echo "▸ Identity merge"
+    echo "  ✅ canonical owner: $OWNER_EMAIL ($OWNER)"
+    echo "  ✅ device aliases: ${ALIASES:-0}"
+    echo "  → 新手機 / Web / Mac agent token 會落到同一顆主人 DB"
+    echo ""
+fi
+
 # 最近 24h 活躍的 user DB
 echo "▸ 最近 24 小時內活躍的 user DB"
 RECENT=$(find $DATA/users -name "*.db" -mtime -1 2>/dev/null | sort)
@@ -69,11 +81,11 @@ done
 
 echo ""
 echo "▸ 解讀提示"
-echo "  • 兩個 user_db 都是你的 → 比較 size / files / last_indexed_at"
-echo "    last_indexed_at 較新那台 = 最近用的"
-echo "  • files 差很多 → 兩邊 Mac index 範圍不同"
-echo "  • convs / memos 差很多 → 那邊對話比較多，記憶較豐富"
-echo ""
-echo "  ⚠️  目前 Alfred 架構「裝置 = 帳號」，兩台機器 = 兩個 user_db"
-echo "      真正合併需要 identity 改造（待做）"
+if [ -n "$OWNER" ]; then
+    echo "  • canonical owner DB 是現在產品主資料庫；dev_*.db 是舊裝置 DB / 歷史備份來源"
+    echo "  • 新裝置登入後會寫入 owner DB，不再新開一顆孤島 DB"
+    echo "  • 若舊 dev_*.db 還有數字，是歷史檔，不代表新架構仍然分裂"
+else
+    echo "  ⚠️  尚未偵測到 identity_aliases；新裝置可能仍會各自建立 user DB"
+fi
 echo "════════════════════════════════════════════════════════════════"

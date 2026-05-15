@@ -41,16 +41,106 @@ def _init_auth_db():
             created_at TEXT,
             last_seen TEXT
         );
+        CREATE TABLE IF NOT EXISTS identity_aliases (
+            alias_user_id TEXT PRIMARY KEY,
+            canonical_user_id TEXT NOT NULL,
+            kind TEXT DEFAULT 'device',
+            external_id TEXT DEFAULT '',
+            created_at TEXT,
+            last_seen TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_identity_aliases_canonical
+            ON identity_aliases(canonical_user_id);
     """)
     c.commit(); c.close()
 
 _init_auth_db()
 
+def _truthy_env(name: str, default: bool = True) -> bool:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return str(val).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _select_primary_owner_user_id() -> Optional[str]:
+    """Pick the canonical owner account for Alfred's single-owner product mode."""
+    configured = os.getenv("ALFRED_PRIMARY_USER_ID") or os.getenv("ALFRED_ADMIN_USER_ID")
+    if configured:
+        return configured.strip()
+    try:
+        c = auth_db()
+        row = c.execute(
+            """SELECT id FROM users
+               WHERE id NOT LIKE 'dev_%'
+                 AND lower(email) NOT LIKE '%test%'
+                 AND lower(email) NOT LIKE 'device%'
+                 AND lower(email) NOT LIKE '%@alfred.local'
+               ORDER BY created_at ASC LIMIT 1"""
+        ).fetchone()
+        if not row:
+            row = c.execute(
+                "SELECT id FROM users WHERE id NOT LIKE 'dev_%' ORDER BY created_at ASC LIMIT 1"
+            ).fetchone()
+        c.close()
+        return row[0] if row else None
+    except Exception as exc:
+        print(f"[identity] primary owner lookup failed: {exc}")
+        return None
+
+
+def _canonical_user_id(user_id: Optional[str]) -> Optional[str]:
+    """Resolve device/web aliases to the owner's canonical user id."""
+    if not user_id:
+        return user_id
+    uid = str(user_id)
+    try:
+        c = auth_db()
+        row = c.execute(
+            "SELECT canonical_user_id FROM identity_aliases WHERE alias_user_id=? LIMIT 1",
+            (uid,),
+        ).fetchone()
+        c.close()
+        if row and row[0]:
+            return row[0]
+    except Exception as exc:
+        print(f"[identity] alias lookup failed: {exc}")
+    if uid.startswith("dev_") and _truthy_env("ALFRED_SINGLE_OWNER_MODE", True):
+        owner = _select_primary_owner_user_id()
+        if owner:
+            return owner
+    return uid
+
+
+def _link_identity_alias(alias_user_id: str, canonical_user_id: str, kind: str = "device", external_id: str = ""):
+    if not alias_user_id or not canonical_user_id or alias_user_id == canonical_user_id:
+        return
+    try:
+        c = auth_db()
+        now = datetime.now().isoformat()
+        c.execute(
+            """INSERT INTO identity_aliases
+               (alias_user_id,canonical_user_id,kind,external_id,created_at,last_seen)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(alias_user_id) DO UPDATE SET
+                 canonical_user_id=excluded.canonical_user_id,
+                 kind=excluded.kind,
+                 external_id=excluded.external_id,
+                 last_seen=excluded.last_seen""",
+            (alias_user_id, canonical_user_id, kind, external_id or "", now, now),
+        )
+        c.commit(); c.close()
+    except Exception as exc:
+        print(f"[identity] alias link failed: {exc}")
+
+
 def user_db_path(user_id: str) -> str:
-    return f"{USER_DB_DIR}/{user_id}.db"
+    uid = _canonical_user_id(user_id) or user_id
+    return f"{USER_DB_DIR}/{uid}.db"
+
 
 def user_db(user_id: str):
-    """每個用戶獨立的 SQLite。"""
+    """每個主人身份一顆 SQLite；裝置 id 會先 resolve 到 canonical owner。"""
     return sqlite3.connect(user_db_path(user_id))
 
 def _ensure_mac_tables(conn):
@@ -144,7 +234,7 @@ def _make_token(user_id: str) -> str:
 def _decode_token(token: str) -> Optional[str]:
     try:
         data = _jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
-        return data.get("sub")
+        return _canonical_user_id(data.get("sub"))
     except Exception:
         return None
 
@@ -10373,43 +10463,44 @@ class DeviceAuthReq(BaseModel):
 
 @app.post("/api/auth/device")
 async def auth_device(req: DeviceAuthReq):
-    """裝置層級登入：用 identifierForVendor 換 token。同 device_id 永遠相同 user_id。"""
+    """裝置登入：device id 可追蹤，但 token 落到 canonical owner，避免多裝置分裂 DB。"""
     import hashlib
     device_id = (req.device_id or "").strip()
     if len(device_id) < 8:
         raise HTTPException(400, "device_id 太短")
-    user_id = "dev_" + hashlib.sha256(device_id.encode()).hexdigest()[:32]
+    device_user_id = "dev_" + hashlib.sha256(device_id.encode()).hexdigest()[:32]
+    canonical_user_id = _canonical_user_id(device_user_id) or device_user_id
     fake_email = f"device-{device_id[:12]}@alfred.local"
     c = auth_db()
-    row = c.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+    row = c.execute("SELECT id FROM users WHERE id=?", (device_user_id,)).fetchone()
+    now = datetime.now().isoformat()
     if not row:
-        now = datetime.now().isoformat()
         try:
             c.execute(
                 "INSERT INTO users (id,email,password_hash,trial_limit,created_at,last_seen) VALUES (?,?,?,?,?,?)",
-                (user_id, fake_email, "device-no-password", 9999, now, now)
+                (device_user_id, fake_email, "device-no-password", 9999, now, now)
             )
             c.commit()
-            udb = user_db(user_id)
-            _init_user_db(udb)
-            udb.close()
         except Exception:
-            # email 衝突時用唯一 email 重試
             c.rollback()
-            unique_email = f"device-{user_id}@alfred.local"
+            unique_email = f"device-{device_user_id}@alfred.local"
             c.execute(
                 "INSERT OR IGNORE INTO users (id,email,password_hash,trial_limit,created_at,last_seen) VALUES (?,?,?,?,?,?)",
-                (user_id, unique_email, "device-no-password", 9999, now, now)
+                (device_user_id, unique_email, "device-no-password", 9999, now, now)
             )
             c.commit()
     else:
-        c.execute("UPDATE users SET last_seen=? WHERE id=?", (datetime.now().isoformat(), user_id))
+        c.execute("UPDATE users SET last_seen=? WHERE id=?", (now, device_user_id))
         c.commit()
     c.close()
+    _link_identity_alias(device_user_id, canonical_user_id, "device", device_id)
+    udb = user_db(canonical_user_id)
+    _init_user_db(udb)
+    udb.close()
     from datetime import timedelta
     exp = datetime.utcnow() + timedelta(days=365)
-    token = _jwt.encode({"sub": user_id, "exp": exp}, JWT_SECRET, algorithm=JWT_ALGO)
-    return {"ok": True, "token": token, "user_id": user_id}
+    token = _jwt.encode({"sub": canonical_user_id, "device_user_id": device_user_id, "exp": exp}, JWT_SECRET, algorithm=JWT_ALGO)
+    return {"ok": True, "token": token, "user_id": canonical_user_id, "device_user_id": device_user_id, "identity_merged": canonical_user_id != device_user_id}
 
 
 @app.post("/api/auth/login")
@@ -10442,6 +10533,25 @@ async def login(req: AuthReq):
         "email": email,
         "subscription": sub_status,
         "trial_remaining": remaining
+    }
+
+
+
+@app.get("/api/identity/status")
+async def identity_status(user_id: str = Depends(require_user)):
+    canonical = _canonical_user_id(user_id) or user_id
+    c = auth_db()
+    aliases = c.execute(
+        "SELECT alias_user_id,kind,external_id,last_seen FROM identity_aliases WHERE canonical_user_id=? ORDER BY last_seen DESC",
+        (canonical,),
+    ).fetchall()
+    c.close()
+    return {
+        "user_id": canonical,
+        "primary_owner": _select_primary_owner_user_id(),
+        "single_owner_mode": _truthy_env("ALFRED_SINGLE_OWNER_MODE", True),
+        "aliases": [{"alias_user_id": r[0], "kind": r[1], "external_id": r[2], "last_seen": r[3]} for r in aliases],
+        "db_path": user_db_path(canonical),
     }
 
 
