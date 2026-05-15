@@ -11876,8 +11876,17 @@ async def require_admin(user_id: str = Depends(require_user)) -> str:
         return user_id
     c = auth_db()
     row = c.execute(
-        "SELECT id FROM users WHERE id NOT LIKE 'dev_%' ORDER BY created_at ASC LIMIT 1"
+        """SELECT id FROM users
+           WHERE id NOT LIKE 'dev_%'
+             AND lower(email) NOT LIKE '%test%'
+             AND lower(email) NOT LIKE 'device%'
+             AND lower(email) NOT LIKE '%@alfred.local'
+           ORDER BY created_at ASC LIMIT 1"""
     ).fetchone()
+    if not row:
+        row = c.execute(
+            "SELECT id FROM users WHERE id NOT LIKE 'dev_%' ORDER BY created_at ASC LIMIT 1"
+        ).fetchone()
     c.close()
     if row and user_id == row[0]:
         return user_id
@@ -12931,15 +12940,6 @@ async def _line_group_ensure_workspace(group_id: str, owner_uid: str = "", group
         (group_id, final_name, final_owner, final_folder, group_id, now, now),
     )
     c.commit(); c.close()
-    _vault_upsert_file(
-        owner_uid, "line_group", filename, source_id=msg_id, mime_type=mime,
-        size=len(content), modified=now, local_path=f"{local_folder}/{filename}",
-        server_path=str(server_path), download_url=f"/line/group-files/{msg_id}",
-        group_id=group_id, group_name=group_name, indexed_state="stored"
-    )
-    _vault_enqueue_index(owner_uid, "line_group_file_stored", "line_group", {
-        "group_id": group_id, "group_name": group_name, "message_id": msg_id, "filename": filename
-    })
     await _broadcast_mac_command({
         "type": "ensure_line_group_folder",
         "group_id": group_id,
@@ -12987,6 +12987,15 @@ async def _line_group_store_file(event: dict):
         (group_id, owner_uid, msg_id, filename, mime, len(content), str(server_path), f"{local_folder}/{filename}", sender_uid, now),
     )
     c.commit(); c.close()
+    _vault_upsert_file(
+        owner_uid, "line_group", filename, source_id=msg_id, mime_type=mime,
+        size=len(content), modified=now, local_path=f"{local_folder}/{filename}",
+        server_path=str(server_path), download_url=f"/line/group-files/{msg_id}",
+        group_id=group_id, group_name=group_name, indexed_state="stored"
+    )
+    _vault_enqueue_index(owner_uid, "line_group_file_stored", "line_group", {
+        "group_id": group_id, "group_name": group_name, "message_id": msg_id, "filename": filename
+    })
     await _broadcast_mac_command({
         "type": "store_line_group_file",
         "group_id": group_id,
@@ -12998,33 +13007,140 @@ async def _line_group_store_file(event: dict):
     })
 
 
-def _line_group_search_files(group_id: str, query: str = "") -> dict | None:
-    if not group_id:
-        return None
-    rows = _rank_line_group_file_rows(group_id, query, fallback=0, limit=5)
-    fallback_note = ""
-    if not rows and query:
-        rows = _rank_line_group_file_rows(group_id, query, fallback=1, limit=5)
-        if rows:
-            sec = rows[0].get("secondary_group") or []
-            fallback_note = f"第一組關鍵字沒有命中，我改用相近詞組（{'、'.join(sec[:4])}）查。\\n"
+_pending_line_group_file_search: dict = {}
+
+
+def _line_group_file_url(message_id: str) -> str:
+    host = os.getenv("SERVER_HOST", "").strip()
+    path = f"/alfred/api/line/group-files/{message_id}"
+    return f"https://{host}{path}" if host else path
+
+
+def _line_group_ranked_candidates(group_id: str, query: str = "", fallback: int = 0, limit: int = 80) -> list[dict]:
+    return _rank_line_group_file_rows(group_id, query, fallback=fallback, limit=limit)
+
+
+def _format_line_group_file_page(group_id: str, state: dict, page: int = 0) -> dict:
+    rows = list(state.get("rows") or [])
+    page = max(0, int(page or 0))
+    start = page * _FILE_RESULT_PAGE_SIZE
+    batch = rows[start:start + _FILE_RESULT_PAGE_SIZE]
+    if not batch:
+        _pending_line_group_file_search.pop(group_id, None)
+        return {"text": "這個群組目前已經沒有下一批檔案。請換公司名、日期、對方名字或檔案類型，我再重新查。", "card": None, "action": None}
+
+    state["page"] = page
+    state["awaiting_continue"] = False
+    state["ts"] = _time.time()
+    _pending_line_group_file_search[group_id] = state
+
     c = db()
     _ensure_line_group_tables(c)
     group = c.execute("SELECT group_name,owner_uid,local_folder FROM line_groups WHERE group_id=?", (group_id,)).fetchone()
     c.close()
-    if not rows:
-        return {"text": "這個群組資料夾裡目前找不到符合的檔案。可以換個檔名、類別或人名關鍵字，我再查。", "card": None, "action": None}
+    folder = group[2] if group else ""
+
     lines = []
-    for i, r in enumerate(rows[:5], 1):
+    for i, r in enumerate(batch, 1):
         cats = "、".join([c["category"] for c in r.get("categories", [])[:2]])
         hits = "、".join((r.get("matched_keywords") or r.get("keywords") or [])[:5])
-        lines.append(f"{i}. {r['filename']}｜{cats}｜權重 {r.get('weight',0):.0f}%｜{hits}")
-    folder = group[2] if group else ""
-    text = fallback_note + "我在這個 LINE 群組的資料夾裡找到：\n" + "\n".join(lines)
+        url = _line_group_file_url(r.get("message_id", ""))
+        lines.append(f"{start + i}. {r['filename']}｜{cats}｜權重 {r.get('weight',0):.0f}%｜{hits}\n   {url}")
+
+    fallback_note = state.get("fallback_note") or ""
+    prefix = "我在這個 LINE 群組的資料夾裡先列前五個：" if page == 0 else f"這是下一批，第 {start + 1} 到第 {start + len(batch)} 個："
+    text = fallback_note + prefix + "\n" + "\n".join(lines)
     if folder:
         text += f"\n\n資料夾：{folder}"
-    text += "\n\n如果都不是，回「都沒有」，我會切到下一組相近關鍵字繼續找。"
+    if start + len(batch) < len(rows):
+        text += "\n\n如果都不是，回「不是」，我會問您要不要繼續列下一批。"
+    else:
+        text += "\n\n這已經是這組關鍵字的最後一批。若都沒有，回「都沒有」，我會換相近詞組再查。"
     return {"text": text, "card": None, "action": None}
+
+
+def _line_group_file_pagination(group_id: str, message: str) -> dict | None:
+    if not group_id:
+        return None
+    state = _pending_line_group_file_search.get(group_id)
+    if not state or _time.time() - state.get("ts", 0) > 900:
+        return None
+
+    compact = (message or "").replace(" ", "").strip()
+    reject_words = ["不是", "都不是", "不對", "沒有", "都沒有", "不是這些", "不在裡面"]
+    continue_words = ["要", "好", "繼續", "下一批", "下一頁", "再列", "再給我", "繼續找"]
+    stop_words = ["不要", "不用", "算了", "停止"]
+
+    if any(w == compact or w in compact for w in stop_words) and state.get("awaiting_continue"):
+        _pending_line_group_file_search.pop(group_id, None)
+        return {"text": "好的，這次群組檔案搜尋先停在這裡。要找時再丟新的關鍵字給我。", "card": None, "action": None}
+
+    page = int(state.get("page", 0) or 0)
+    has_more = (page + 1) * _FILE_RESULT_PAGE_SIZE < len(state.get("rows") or [])
+    rejects = any(w == compact or w in compact for w in reject_words)
+    wants_continue = any(w == compact or w in compact for w in continue_words)
+
+    if rejects and wants_continue:
+        if has_more:
+            return _format_line_group_file_page(group_id, state, page + 1)
+        state["fallback"] = int(state.get("fallback", 0) or 0) + 1
+        rows = _line_group_ranked_candidates(group_id, state.get("query", ""), fallback=state["fallback"], limit=80)
+        if rows:
+            state["rows"] = rows
+            state["page"] = 0
+            state["fallback_note"] = "上一組沒有命中，我改用相近詞組繼續查。\n"
+            return _format_line_group_file_page(group_id, state, 0)
+
+    if state.get("awaiting_continue") and wants_continue:
+        if has_more:
+            return _format_line_group_file_page(group_id, state, page + 1)
+        return {"text": "這組已經沒有下一批。要我改用相近詞組繼續查嗎？", "card": None, "action": None}
+
+    if rejects:
+        state["awaiting_continue"] = True
+        state["ts"] = _time.time()
+        _pending_line_group_file_search[group_id] = state
+        if has_more:
+            return {"text": "好的，這五個先排除。要我繼續列下一批五個嗎？", "card": None, "action": None}
+        state["fallback"] = int(state.get("fallback", 0) or 0) + 1
+        rows = _line_group_ranked_candidates(group_id, state.get("query", ""), fallback=state["fallback"], limit=80)
+        if rows:
+            state["rows"] = rows
+            state["page"] = 0
+            state["awaiting_continue"] = False
+            state["fallback_note"] = "這組沒有下一批，我改用相近詞組繼續查。\n"
+            return _format_line_group_file_page(group_id, state, 0)
+        _pending_line_group_file_search.pop(group_id, None)
+        return {"text": "這個群組資料夾目前沒有更多相近檔案。請補公司名、日期、對方名字或檔案副檔名，我再重新查。", "card": None, "action": None}
+
+    return None
+
+
+def _line_group_search_files(group_id: str, query: str = "") -> dict | None:
+    if not group_id:
+        return None
+    rows = _line_group_ranked_candidates(group_id, query, fallback=0, limit=80)
+    fallback_note = ""
+    fallback = 0
+    if not rows and query:
+        fallback = 1
+        rows = _line_group_ranked_candidates(group_id, query, fallback=fallback, limit=80)
+        if rows:
+            sec = rows[0].get("secondary_group") or []
+            fallback_note = f"第一組關鍵字沒有命中，我改用相近詞組（{'、'.join(sec[:4])}）查。\n"
+    if not rows:
+        return {"text": "這個群組資料夾裡目前找不到符合的檔案。可以換個檔名、類別、日期或人名關鍵字，我再查。", "card": None, "action": None}
+    state = {
+        "query": query,
+        "rows": rows,
+        "page": 0,
+        "fallback": fallback,
+        "fallback_note": fallback_note,
+        "awaiting_continue": False,
+        "ts": _time.time(),
+    }
+    _pending_line_group_file_search[group_id] = state
+    return _format_line_group_file_page(group_id, state, 0)
 
 
 @app.get("/api/line/group-files/{message_id}")
@@ -13138,8 +13254,10 @@ async def line_webhook(request: Request):
         user_text = event["message"].get("text", "")
         if group_id:
             asyncio.create_task(_line_group_ensure_workspace(group_id, user_id))
-            group_file_result = _line_group_search_files(group_id, user_text)
-            if group_file_result and any(k in user_text for k in ["找", "檔案", "文件", "資料", "合約", "報告", "照片", "圖片"]):
+            group_file_result = _line_group_file_pagination(group_id, user_text)
+            if not group_file_result and any(k in user_text for k in ["找", "檔案", "文件", "資料", "合約", "報告", "照片", "圖片", "報價", "發票", "請款", "公證書"]):
+                group_file_result = _line_group_search_files(group_id, user_text)
+            if group_file_result:
                 if reply_token:
                     line_service.reply_message(reply_token, group_file_result["text"])
                 continue

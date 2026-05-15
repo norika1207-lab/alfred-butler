@@ -1,4 +1,4 @@
-## ⭐ 開發進度表(自動生成 — last: 2026-05-15 22:34)
+## ⭐ 開發進度表(自動生成 — last: 2026-05-15 22:46)
 
 > **這份是必讀。Alfred 整個進度都在這。**
 > 由 `scripts/generate_status.py` 掃 codebase 自動生成,**不要手動改這段(`<!-- BEGIN/END AUTO_STATUS -->` 之間)**。
@@ -8,7 +8,7 @@
 
 | 維度 | 數量 |
 |---|---:|
-| `backend/main.py` 行數 | 16,744 |
+| `backend/main.py` 行數 | 16,862 |
 | API endpoints(`@app.*`)| 146 |
 | LLM tools | 69 |
 | Fastpath 函數(zero LLM)| 17 |
@@ -166,6 +166,7 @@
 **最近 20 commits**:
 
 ```
+5da8702 Make GPS tracking functional
 e7bf37b Fix web voice mode TTS
 b672cfc Fix Alfred listening mode feedback
 32fae81 Stabilize Alfred mode and demo regression
@@ -185,7 +186,6 @@ d258ab7 feat: POI Crack A01 — OSM Overpass 全台 35,845 餐廳 + nearby fastp
 f444905 feat: weather fastpath — 主人問天氣不打 LLM,48s -> 2s
 5c3cc68 feat: anniversary 主動鏈 — 30/7/1/0 天前自動推送
 37a38e4 feat: biggo 接線 + emotional/care 觸發推 LINE
-7cf7970 第七視窗整合 — 修速度 / 接 travel_hotels / emotional 主動鏈 / 進度自動化
 ```
 
 **rollback tags**(最近 10):
