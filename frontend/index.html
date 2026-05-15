@@ -637,16 +637,29 @@ function unlockAudio() {
 }
 
 async function speak(text) {
-  if (_muted) return;
+  if (_muted || !text) return;
   stopSpeaking();
-  if (!actx) { speakFallback(text); return; }
+  unlockAudio();
+  if (!actx) { showToast('瀏覽器音訊尚未解鎖，請再點一下阿福。'); return; }
   if (actx.state === 'suspended') await actx.resume();
   try {
-    const resp = await fetch(API + '/tts', {
+    if (!_token) await ensureAuth();
+    let resp = await fetch(API + '/tts', {
       method: 'POST', headers: authHeaders(),
       body: JSON.stringify({text})
     });
+    if (resp.status === 401 || resp.status === 403) {
+      localStorage.removeItem(TOK_KEY);
+      _token = null;
+      await ensureAuth();
+      resp = await fetch(API + '/tts', {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({text})
+      });
+    }
+    if (!resp.ok) throw new Error('tts failed ' + resp.status);
     const arrayBuf = await resp.arrayBuffer();
+    if (!arrayBuf.byteLength) throw new Error('empty tts audio');
     const audioBuf = await actx.decodeAudioData(arrayBuf);
     currentSource = actx.createBufferSource();
     currentSource.buffer = audioBuf;
@@ -654,25 +667,12 @@ async function speak(text) {
     currentSource.connect(actx.destination);
     currentSource.start(0);
   } catch(e) {
-    speakFallback(text);
+    console.error('[Alfred] Michael Caine TTS failed:', e);
+    showToast('Michael Caine 聲音暫時無法播放，請再試一次。');
   }
 }
 
-function speakFallback(text) {
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.resume();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = 'zh-TW'; u.rate = 0.78; u.pitch = 0.52; u.volume = 1;
-  const voices = window.speechSynthesis.getVoices();
-  const pick = voices.find(v => /zh/.test(v.lang) && /male|man/i.test(v.name))
-              || voices.find(v => /zh-TW/.test(v.lang))
-              || voices.find(v => /zh/.test(v.lang));
-  if (pick) u.voice = pick;
-  window.speechSynthesis.speak(u);
-}
-
 function stopSpeaking() {
-  window.speechSynthesis.cancel();
   if (currentSource) { try { currentSource.stop(); } catch(e) {} currentSource = null; }
 }
 
@@ -885,8 +885,6 @@ document.getElementById('screen').addEventListener('touchend', () => clearTimeou
 let ty0 = 0;
 document.getElementById('card').addEventListener('touchstart', e => { ty0 = e.touches[0].clientY; }, {passive:true});
 document.getElementById('card').addEventListener('touchend', e => { if (e.changedTouches[0].clientY - ty0 > 70) closeCard(); }, {passive:true});
-
-speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
 
 // ── Media player ──────────────────────────────────────────────────────────────
 function showAudioPlayer(action) {

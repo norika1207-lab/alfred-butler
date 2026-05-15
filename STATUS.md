@@ -1,4 +1,4 @@
-## ⭐ 開發進度表(自動生成 — last: 2026-05-15 21:16)
+## ⭐ 開發進度表(自動生成 — last: 2026-05-15 21:22)
 
 > **這份是必讀。Alfred 整個進度都在這。**
 > 由 `scripts/generate_status.py` 掃 codebase 自動生成,**不要手動改這段(`<!-- BEGIN/END AUTO_STATUS -->` 之間)**。
@@ -166,6 +166,7 @@
 **最近 20 commits**:
 
 ```
+b672cfc Fix Alfred listening mode feedback
 32fae81 Stabilize Alfred mode and demo regression
 313dc4c docs: 整理 2026-05-14 整日修法總結進 README
 0090dfa feat(ios): conversational mode — 大頭像 tap toggle, 不再 push-to-talk
@@ -185,7 +186,6 @@ f444905 feat: weather fastpath — 主人問天氣不打 LLM,48s -> 2s
 37a38e4 feat: biggo 接線 + emotional/care 觸發推 LINE
 7cf7970 第七視窗整合 — 修速度 / 接 travel_hotels / emotional 主動鏈 / 進度自動化
 523594e feat: extras/ — scale-up indexer tools + scrapers
-2f1c513 auto: update README.md
 ```
 
 **rollback tags**(最近 10):
