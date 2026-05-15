@@ -314,11 +314,7 @@ class AlfredViewModel: NSObject, ObservableObject {
 
     private func speakAck() async {
         if state == .listening { return }
-        if let url = bundledAudioURL(named: "ack_master_received", in: "voice_bank"),
-           let audioData = try? Data(contentsOf: url) {
-            await audio.play(data: audioData)
-            return
-        }
+        if await VoiceBankPlayer.shared.playRandom(in: "ack_butler") { return }
 
         do {
             let audioData = try await api.tts(text: "阿福已經收到您的指令。")
@@ -597,6 +593,14 @@ class AlfredViewModel: NSObject, ObservableObject {
         let type = action["type"] ?? ""
         ConversationLog.shared.log(role: "assistant", text: fullText, action: type)
         switch type {
+        case "play_voice_bank":
+            let category = action["category"] ?? "ack_butler"
+            let played = await VoiceBankPlayer.shared.playRandom(in: category)
+            if !played {
+                await speakText(fullText)
+            }
+            state = .idle
+
         case "speak_translation":
             let translated = action["translated"] ?? ""
             let lang = action["lang"] ?? "en"
@@ -735,15 +739,15 @@ class AlfredViewModel: NSObject, ObservableObject {
         case "travel": fileName = "mode_travel_enter"
         default: fileName = nil
         }
-        if let fileName,
-           let url = bundledAudioURL(named: fileName, in: "voice_bank"),
-           let audioData = try? Data(contentsOf: url) {
+        if let fileName {
             guard state != .listening else { return }
             let generation = speechGeneration
             state = .speaking
-            await audio.play(data: audioData)
-            if generation == speechGeneration, state == .speaking { state = .idle }
-            return
+            let played = await VoiceBankPlayer.shared.play(id: fileName)
+            if played {
+                if generation == speechGeneration, state == .speaking { state = .idle }
+                return
+            }
         }
         await speakText(fallbackText)
     }

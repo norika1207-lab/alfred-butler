@@ -1,34 +1,59 @@
 import Foundation
 import AVFoundation
 
-/// VoiceBankPlayer — 從 2500+ 預錄 mp3 隨機 / 規則挑播
+/// VoiceBankPlayer — 從 bundle 預錄 mp3 隨機 / 規則挑播。
 ///
-/// 跟 AlfredViewModel.speakLocally 並列：
-///   - speakLocally(text)：AVSpeechSynthesizer，沒預錄音檔時的 fallback
-///   - VoiceBankPlayer.playRandom(in: "ack_short")：從同類別隨機抽一個 mp3 播
-///
-/// 用途：在已知情境（ack / mode_enter / mood_care / 等）下，直接播
-/// ElevenLabs Michael Caine clone 預錄音色，0 網路、0 LLM。
+/// 產品策略：
+/// - 有 `voice_bank_manifest.json` 時照 manifest 分類。
+/// - 沒 manifest 時直接掃 bundle 內 `voice_bank` / `Resources/voice_bank` /
+///   `voices` / `Resources/voices`，用檔名前綴自動建分類。
+/// - backend action: `play_voice_bank`、iOS AliceFastpath、場景模式都走這裡。
 @MainActor
 final class VoiceBankPlayer {
 
     static let shared = VoiceBankPlayer()
 
-    private var manifest: [String: [String]] = [:]  // category → [filename without .mp3]
+    private var manifest: [String: [String]] = [:]  // category -> filename without .mp3
     private var player: AVAudioPlayer?
+
+    private let searchSubdirectories = [
+        "voice_bank",
+        "Resources/voice_bank",
+        "voices",
+        "Resources/voices",
+        nil,
+    ]
+
+    private let categoryAliases: [String: [String]] = [
+        "ack_butler": ["ack_butler", "ack_short", "ack_got_it", "ack_understood", "character_here", "character_ready"],
+        "greet_time": ["greet_time", "greet_morning", "greet_afternoon", "greet_evening", "greet_latenight", "goodnight"],
+        "mode_enter": ["mode_enter", "context_at_home", "context_at_office", "context_traveling"],
+        "travel_mode": ["travel_mode", "travel", "context_traveling"],
+        "family_safety": ["family_safety", "family_safe", "family_alert", "family_opening"],
+        "mood_care": ["mood_care", "care_mood", "care_tired", "care_overworking"],
+        "health_monitoring": ["health_monitoring", "health", "care_medicine", "health_stretching"],
+        "file_search": ["file_search", "search", "search_drive", "search_found_multiple", "search_looking"],
+        "document_review": ["document_review", "doc", "contract", "analyze"],
+        "calendar": ["calendar", "cal"],
+        "approval_gate": ["approval_gate", "confirm"],
+        "error_recovery": ["error_recovery", "error"],
+        "office_manager": ["office_manager", "eod", "attendance"],
+    ]
 
     private init() {
         loadManifest()
+        if manifest.isEmpty {
+            scanBundledAudio()
+        }
     }
 
-    /// 從 manifest 載入 category → ids 對應
     private func loadManifest() {
         guard let url = Bundle.main.url(forResource: "voice_bank_manifest", withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let lines = json["lines"] as? [[String: Any]]
         else {
-            NSLog("[VoiceBank] manifest load failed")
+            NSLog("[VoiceBank] manifest not found; scanning bundle")
             return
         }
         var map: [String: [String]] = [:]
@@ -37,31 +62,76 @@ final class VoiceBankPlayer {
                   let cat = line["category"] as? String else { continue }
             map[cat, default: []].append(id)
         }
-        self.manifest = map
+        manifest = map
         let totalIds = map.values.reduce(0) { $0 + $1.count }
-        NSLog("[VoiceBank] loaded %d categories, %d total ids", map.count, totalIds)
+        NSLog("[VoiceBank] manifest loaded %d categories, %d ids", map.count, totalIds)
     }
 
-    /// 從指定 category 隨機抽一個 mp3 播
-    func playRandom(in category: String) async -> Bool {
-        guard let ids = manifest[category], !ids.isEmpty else {
-            NSLog("[VoiceBank] no ids in category=%@", category)
-            return false
+    private func scanBundledAudio() {
+        var map: [String: [String]] = [:]
+        for subdirectory in searchSubdirectories {
+            guard let urls = Bundle.main.urls(forResourcesWithExtension: "mp3", subdirectory: subdirectory) else {
+                continue
+            }
+            for url in urls {
+                let id = url.deletingPathExtension().lastPathComponent
+                add(id: id, to: &map)
+            }
         }
-        let id = ids.randomElement()!
-        return await play(id: id)
+        manifest = map
+        let totalIds = map.values.reduce(0) { $0 + $1.count }
+        NSLog("[VoiceBank] scanned %d categories, %d ids", map.count, totalIds)
     }
 
-    /// 播指定 id 的 mp3
+    private func add(id: String, to map: inout [String: [String]]) {
+        guard !id.isEmpty else { return }
+        map[id, default: []].append(id)
+
+        let parts = id.split(separator: "_").map(String.init)
+        guard parts.count >= 2 else { return }
+
+        let first = parts[0]
+        map[first, default: []].append(id)
+
+        if parts.count >= 3, Int(parts.last ?? "") != nil {
+            let category = parts.dropLast().joined(separator: "_")
+            map[category, default: []].append(id)
+        } else {
+            let category = parts.prefix(2).joined(separator: "_")
+            map[category, default: []].append(id)
+        }
+    }
+
+    func playRandom(in category: String) async -> Bool {
+        let keys = [category] + (categoryAliases[category] ?? [])
+        for key in keys {
+            if let ids = manifest[key], !ids.isEmpty {
+                return await play(id: ids.randomElement()!)
+            }
+        }
+        NSLog("[VoiceBank] no ids in category=%@", category)
+        return false
+    }
+
     func play(id: String) async -> Bool {
-        guard let url = Bundle.main.url(forResource: id, withExtension: "mp3", subdirectory: "voice_bank")
-              ?? Bundle.main.url(forResource: id, withExtension: "mp3")
-        else {
+        guard let url = audioURL(for: id) else {
             NSLog("[VoiceBank] mp3 not found: %@", id)
             return false
         }
+        return await play(url: url)
+    }
+
+    private func audioURL(for id: String) -> URL? {
+        for subdirectory in searchSubdirectories {
+            if let url = Bundle.main.url(forResource: id, withExtension: "mp3", subdirectory: subdirectory) {
+                return url
+            }
+        }
+        return nil
+    }
+
+    private func play(url: URL) async -> Bool {
         do {
-            // 確保 audio session category 跟 AudioEngine 一致
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .default,
                                     options: [.defaultToSpeaker, .allowBluetoothHFP])
@@ -69,13 +139,11 @@ final class VoiceBankPlayer {
             try session.overrideOutputAudioPort(.speaker)
 
             let p = try AVAudioPlayer(contentsOf: url)
-            p.volume = 1.0  // 最大音量（mp3 本身已 ffmpeg 放大）
+            p.volume = 1.0
             p.prepareToPlay()
             p.play()
-            self.player = p
-            // 等播完
-            let dur = p.duration
-            try await Task.sleep(nanoseconds: UInt64(dur * 1_000_000_000))
+            player = p
+            try await Task.sleep(nanoseconds: UInt64(max(p.duration, 0.2) * 1_000_000_000))
             return true
         } catch {
             NSLog("[VoiceBank] play failed: %@", String(describing: error))
@@ -83,8 +151,8 @@ final class VoiceBankPlayer {
         }
     }
 
-    /// 看 category 有幾個 id（debug 用）
     func count(in category: String) -> Int {
-        manifest[category]?.count ?? 0
+        let keys = [category] + (categoryAliases[category] ?? [])
+        return keys.reduce(0) { $0 + (manifest[$1]?.count ?? 0) }
     }
 }

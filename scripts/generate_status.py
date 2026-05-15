@@ -130,7 +130,7 @@ SWIFT_ROLES = {
     "Core/AfuBrainGate.swift": "MASL gate,destructive action 本地擋",
     "Core/AliceFastpath.swift": "時間/日期/數學/單位/早安謝謝 zero-LLM(待補 liveness)",
     "Core/PermissionCascade.swift": "漸進式權限請求",
-    "Core/VoiceBankPlayer.swift": "🔴 卸下待補 — 預錄 mp3 抽取播放(0 引用)",
+    "Core/VoiceBankPlayer.swift": "✅ 已接線 — bundle voice_bank / Resources/voices 本地 mp3 播放,fastpath/action 優先使用",
     "Features/Chat/AlfredView.swift": "主畫面,語音按鈕 + AmbientButton overlay",
     "Features/Auth/ConsentView.swift": "第三方 AI 同意聲明(首次啟動)",
     "Features/Auth/LoginView.swift": "🔴 legacy email 登入,平時不顯示",

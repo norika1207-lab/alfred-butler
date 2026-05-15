@@ -1,4 +1,4 @@
-## ⭐ 開發進度表(自動生成 — last: 2026-05-15 23:15)
+## ⭐ 開發進度表(自動生成 — last: 2026-05-16 00:25)
 
 > **這份是必讀。Alfred 整個進度都在這。**
 > 由 `scripts/generate_status.py` 掃 codebase 自動生成,**不要手動改這段(`<!-- BEGIN/END AUTO_STATUS -->` 之間)**。
@@ -16,9 +16,9 @@
 | Backend service modules | 9 |
 | Populate seed scripts | 6 |
 | Scrapers in tree | 11 |
-| iOS Swift 檔 | 26 個,共 5,375 行 |
+| iOS Swift 檔 | 26 個,共 5,447 行 |
 | voice_bank 預錄 mp3 | 3,061 個 |
-| `alfred.db` 大小 | 254 MB |
+| `alfred.db` 大小 | 309 MB |
 | 主人上傳分析過的檔案 | 41 |
 
 ### Fastpath 函數(zero LLM 秒答)
@@ -85,7 +85,7 @@
 | `Alfred/AlfredApp.swift` | 62 | App 入口 + consent gate |
 | `Alfred/Core/AfuBrainGate.swift` | 213 | MASL gate,destructive action 本地擋 |
 | `Alfred/Core/AlfredAPI.swift` | 573 | 後端 API client(含 SSE stream) |
-| `Alfred/Core/AlfredViewModel.swift` | 876 | 主 ViewModel,狀態機,action dispatch |
+| `Alfred/Core/AlfredViewModel.swift` | 880 | 主 ViewModel,狀態機,action dispatch |
 | `Alfred/Core/AliceFastpath.swift` | 288 | 時間/日期/數學/單位/早安謝謝 zero-LLM(待補 liveness) |
 | `Alfred/Core/AmbientRecorder.swift` | 237 | 被動環境錄音,120s chunk |
 | `Alfred/Core/AudioEngine.swift` | 178 | AVAudioRecorder + AVAudioPlayer |
@@ -96,7 +96,7 @@
 | `Alfred/Core/LocationManager.swift` | 131 | CLLocationManager + /api/location/update |
 | `Alfred/Core/PermissionCascade.swift` | 146 | 漸進式權限請求 |
 | `Alfred/Core/PhotosManager.swift` | 91 | iOS Photos 權限 + 選圖 |
-| `Alfred/Core/VoiceBankPlayer.swift` | 90 | 🔴 卸下待補 — 預錄 mp3 抽取播放(0 引用) |
+| `Alfred/Core/VoiceBankPlayer.swift` | 158 | ✅ 已接線 — bundle voice_bank / Resources/voices 本地 mp3 播放,fastpath/action 優先使用 |
 | `Alfred/Features/Ambient/AmbientButton.swift` | 105 | 金色環,長按啟動 ambient |
 | `Alfred/Features/Attendance/AttendanceView.swift` | 231 | 出勤記錄 view |
 | `Alfred/Features/Auth/ConsentView.swift` | 171 | 第三方 AI 同意聲明(首次啟動) |
@@ -166,6 +166,7 @@
 **最近 20 commits**:
 
 ```
+9837e1a Use Norika primary owner identity
 24ecf7d Merge devices into owner identity
 f070294 Productize LINE group file search
 5da8702 Make GPS tracking functional
@@ -185,7 +186,6 @@ e92be48 fix(ios audio): TTS 雜音 root cause — 三個 player 統一 AVAudioSe
 1ec91ef feat(identity): owner_identity singleton + LINE/TG gate (Bug 修法 a)
 c9e8154 fix: LINE 對話邏輯 — fastpath chain + 餐飲意圖 + 區名 + history
 d258ab7 feat: POI Crack A01 — OSM Overpass 全台 35,845 餐廳 + nearby fastpath
-f444905 feat: weather fastpath — 主人問天氣不打 LLM,48s -> 2s
 ```
 
 **rollback tags**(最近 10):
