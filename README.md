@@ -1,9 +1,22 @@
+<!-- ALFRED_MANDATORY_SESSION_BOOTSTRAP -->
+# MANDATORY FIRST STEP FOR ANY ALFRED / AFU / ALICE REQUEST
+
+Before any analysis, file edit, DB write, backend patch, demo edit, iOS change, systemd change, or conclusion about Alfred / Afu / Alice / File Map, run:
+
+```bash
+/usr/local/bin/alfred-context-guard
+```
+
+This is required even in a new session. Do not patch first and read docs later. See `/opt/alfred/ALFRED_MANDATORY_SESSION_BOOTSTRAP.md`.
+
+<!-- /ALFRED_MANDATORY_SESSION_BOOTSTRAP -->
+
 # 阿福 Alfred
 
 
 <!-- BEGIN AUTO_STATUS -->
 
-## ⭐ 開發進度表(自動生成 — last: 2026-05-15 21:22)
+## ⭐ 開發進度表(自動生成 — last: 2026-05-15 22:34)
 
 > **這份是必讀。Alfred 整個進度都在這。**
 > 由 `scripts/generate_status.py` 掃 codebase 自動生成,**不要手動改這段(`<!-- BEGIN/END AUTO_STATUS -->` 之間)**。
@@ -13,17 +26,17 @@
 
 | 維度 | 數量 |
 |---|---:|
-| `backend/main.py` 行數 | 16,715 |
-| API endpoints(`@app.*`)| 145 |
+| `backend/main.py` 行數 | 16,744 |
+| API endpoints(`@app.*`)| 146 |
 | LLM tools | 69 |
 | Fastpath 函數(zero LLM)| 17 |
 | DB tables(`CREATE TABLE`)| 71 |
 | Backend service modules | 9 |
 | Populate seed scripts | 6 |
 | Scrapers in tree | 11 |
-| iOS Swift 檔 | 26 個,共 5,315 行 |
+| iOS Swift 檔 | 26 個,共 5,375 行 |
 | voice_bank 預錄 mp3 | 3,061 個 |
-| `alfred.db` 大小 | 244 MB |
+| `alfred.db` 大小 | 245 MB |
 | 主人上傳分析過的檔案 | 41 |
 
 ### Fastpath 函數(zero LLM 秒答)
@@ -87,10 +100,10 @@
 
 | 檔案 | 行數 | 角色 |
 |---|---:|---|
-| `Alfred/AlfredApp.swift` | 60 | App 入口 + consent gate |
+| `Alfred/AlfredApp.swift` | 62 | App 入口 + consent gate |
 | `Alfred/Core/AfuBrainGate.swift` | 213 | MASL gate,destructive action 本地擋 |
 | `Alfred/Core/AlfredAPI.swift` | 573 | 後端 API client(含 SSE stream) |
-| `Alfred/Core/AlfredViewModel.swift` | 875 | 主 ViewModel,狀態機,action dispatch |
+| `Alfred/Core/AlfredViewModel.swift` | 876 | 主 ViewModel,狀態機,action dispatch |
 | `Alfred/Core/AliceFastpath.swift` | 288 | 時間/日期/數學/單位/早安謝謝 zero-LLM(待補 liveness) |
 | `Alfred/Core/AmbientRecorder.swift` | 237 | 被動環境錄音,120s chunk |
 | `Alfred/Core/AudioEngine.swift` | 178 | AVAudioRecorder + AVAudioPlayer |
@@ -98,8 +111,8 @@
 | `Alfred/Core/BackgroundManager.swift` | 193 | reminder / family alert / visit prep 輪詢 |
 | `Alfred/Core/ConversationLog.swift` | 44 | 對話歷史寫到 Documents/ |
 | `Alfred/Core/HealthKitManager.swift` | 138 | HealthKit + workout sync |
-| `Alfred/Core/LocationManager.swift` | 75 | CLLocationManager + /api/location/update |
-| `Alfred/Core/PermissionCascade.swift` | 145 | 漸進式權限請求 |
+| `Alfred/Core/LocationManager.swift` | 131 | CLLocationManager + /api/location/update |
+| `Alfred/Core/PermissionCascade.swift` | 146 | 漸進式權限請求 |
 | `Alfred/Core/PhotosManager.swift` | 91 | iOS Photos 權限 + 選圖 |
 | `Alfred/Core/VoiceBankPlayer.swift` | 90 | 🔴 卸下待補 — 預錄 mp3 抽取播放(0 引用) |
 | `Alfred/Features/Ambient/AmbientButton.swift` | 105 | 金色環,長按啟動 ambient |
@@ -162,7 +175,7 @@
 
 | 類別 | 數量 / 內容 |
 |---|---|
-| `*.bak*` 檔案 | 105 個 |
+| `*.bak*` 檔案 | 131 個 |
 | 備份資料夾 | ResourceBackups |
 | 舊快照 | ios_latest.zip, ios_app, ios |
 
@@ -171,6 +184,7 @@
 **最近 20 commits**:
 
 ```
+e7bf37b Fix web voice mode TTS
 b672cfc Fix Alfred listening mode feedback
 32fae81 Stabilize Alfred mode and demo regression
 313dc4c docs: 整理 2026-05-14 整日修法總結進 README
@@ -190,7 +204,6 @@ f444905 feat: weather fastpath — 主人問天氣不打 LLM,48s -> 2s
 5c3cc68 feat: anniversary 主動鏈 — 30/7/1/0 天前自動推送
 37a38e4 feat: biggo 接線 + emotional/care 觸發推 LINE
 7cf7970 第七視窗整合 — 修速度 / 接 travel_hotels / emotional 主動鏈 / 進度自動化
-523594e feat: extras/ — scale-up indexer tools + scrapers
 ```
 
 **rollback tags**(最近 10):
@@ -896,3 +909,17 @@ extras/
 ```
 
 詳細說明見 [`extras/README.md`](extras/README.md)。
+
+
+## Mandatory Context Guard Update (2026-05-15T21:57:38)
+
+Alfred now has the same VPS-level mandatory context mechanism as Lobster.
+
+- Entry guard: `/usr/local/bin/alfred-context-guard`
+- Session bootstrap: `/opt/alfred/ALFRED_MANDATORY_SESSION_BOOTSTRAP.md`
+- Unified shell hook: `/etc/profile.d/00-mandatory-context-guards.sh`
+- Root shell startup files source it from `/root/.bashrc` and `/root/.profile`
+- Trigger words include `Alfred`, `Afu`, `Alice`, `file map`, `summary backfill`, `smart-search`, `Qwen`, `Telegram`, and `LINE`.
+- Before editing or diagnosing Alfred, the guard must load all Alfred `.md` files, the DB map, File Map / Summary Runtime references, and service status.
+- File Map exists in the live DB layer: main `/opt/alfred/data/alfred.db` currently has `vault_files`, `vault_file_keywords`, `vault_file_summaries`, `vault_file_materializations`, `drive_index`, and `mac_files_index` tables. Current observation: materialization rows are still `0`, so materialization execution needs separate validation before claiming it is fully active.
+

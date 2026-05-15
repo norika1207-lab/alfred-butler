@@ -9759,7 +9759,7 @@ def _detect_lang(text: str) -> str:
 async def tts(req: TTSReq, user_id: str = Depends(require_user)):
     el_key = os.getenv("ELEVENLABS_API_KEY", "")
     if not el_key:
-        return StreamingResponse(iter([b""]), media_type="audio/mpeg")
+        raise HTTPException(status_code=503, detail="TTS voice service is not configured")
 
     lang = _detect_lang(req.text)
     VOICE_ID = "YWnZZfEtTni5X2rz4DEg"  # Alfred 阿福 (Michael Caine clone)
@@ -9786,24 +9786,31 @@ async def tts(req: TTSReq, user_id: str = Depends(require_user)):
     # 截斷（TTS 最多 2500 字元）
     text = text[:2500]
 
+    audio = b""
+    last_status = 0
     async with httpx.AsyncClient(timeout=60) as c:
-        resp = await c.post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}",
-            headers={"xi-api-key": el_key, "Content-Type": "application/json"},
-            json={
-                "text": text,
-                "model_id": "eleven_multilingual_v2",
-                "voice_settings": {
-                    "stability": 0.75,
-                    "similarity_boost": 0.80,
-                    "style": 0.05,
-                    "use_speaker_boost": True
+        for attempt in range(2):
+            resp = await c.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}",
+                headers={"xi-api-key": el_key, "Content-Type": "application/json"},
+                json={
+                    "text": text,
+                    "model_id": "eleven_multilingual_v2",
+                    "voice_settings": {
+                        "stability": 0.75,
+                        "similarity_boost": 0.80,
+                        "style": 0.05,
+                        "use_speaker_boost": True
+                    }
                 }
-            }
-        )
-        if resp.status_code != 200:
-            return StreamingResponse(iter([b""]), media_type="audio/mpeg")
-        audio = resp.content
+            )
+            last_status = resp.status_code
+            if resp.status_code == 200 and resp.content and len(resp.content) > 1000:
+                audio = resp.content
+                break
+            await asyncio.sleep(0.4)
+    if not audio:
+        raise HTTPException(status_code=502, detail=f"TTS voice service failed ({last_status})")
 
     # ElevenLabs dynamic TTS can be much quieter than bundled voice files.
     # Normalize here so spoken replies match the pre-recorded acknowledgement volume.
@@ -13922,7 +13929,9 @@ def recent_places(limit: int = 20):
 
 
 @app.get("/api/location/context")
-async def location_context():
+async def location_context(current_user: Optional[str] = Depends(get_current_user)):
+    global _current_user_id
+    _current_user_id = current_user
     """
     依最新 GPS 判斷主人現在在哪裡（home/office/gym/other/unknown），
     並給出阿福的主動問候文字，前端 GPS 抵達已知地點時呼叫。
@@ -14053,6 +14062,26 @@ async def location_context():
         "greeting": greeting,
         "checkin_recorded": checkin_recorded,
         "checkout_recorded": checkout_recorded,
+    }
+
+
+@app.get("/api/location/latest")
+def location_latest(current_user: Optional[str] = Depends(get_current_user)):
+    """Return the latest GPS point for diagnostics and product status."""
+    global _current_user_id
+    _current_user_id = current_user
+    c = db()
+    row = c.execute(
+        "SELECT lat,lng,speed,heading,accuracy,mode,ts FROM location_log ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    count = c.execute("SELECT COUNT(*) FROM location_log").fetchone()[0]
+    c.close()
+    if not row:
+        return {"ok": True, "has_location": False, "count": count}
+    return {
+        "ok": True, "has_location": True, "count": count,
+        "lat": row[0], "lng": row[1], "speed": row[2], "heading": row[3],
+        "accuracy": row[4], "mode": row[5], "ts": row[6],
     }
 
 

@@ -12,6 +12,9 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
     private var batch: [[String: Any]] = []
     private var lastUpload = Date()
+    @Published private(set) var isTracking = false
+    @Published private(set) var lastError: String? = nil
+    @Published private(set) var lastCoordinate: CLLocationCoordinate2D? = nil
 
     override init() {
         super.init()
@@ -23,8 +26,34 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
             manager.allowsBackgroundLocationUpdates = true
         }
         manager.pausesLocationUpdatesAutomatically = false
+    }
+
+    func startTracking() {
+        let status = manager.authorizationStatus
+        switch status {
+        case .notDetermined:
+            manager.requestWhenInUseAuthorization()
+        case .authorizedWhenInUse, .authorizedAlways:
+            startLocationUpdates()
+        case .denied, .restricted:
+            lastError = "GPS 權限未開啟"
+            isTracking = false
+        @unknown default:
+            lastError = "GPS 權限狀態未知"
+            isTracking = false
+        }
+    }
+
+    private func startLocationUpdates() {
+        guard CLLocationManager.locationServicesEnabled() else {
+            lastError = "系統定位服務未開啟"
+            isTracking = false
+            return
+        }
         manager.startUpdatingLocation()
         manager.startMonitoringSignificantLocationChanges()
+        isTracking = true
+        lastError = nil
     }
 
     // MARK: - CLLocationManagerDelegate
@@ -40,6 +69,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
                     "accuracy": loc.horizontalAccuracy,
                     "ts": ISO8601DateFormatter().string(from: loc.timestamp)
                 ]
+                self.lastCoordinate = loc.coordinate
                 self.batch.append(point)
             }
             // 每 30 秒或累積 10 點上傳一次
@@ -50,7 +80,27 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        // 系統自動處理授權，不需要 UI
+        Task { @MainActor in
+            switch manager.authorizationStatus {
+            case .authorizedWhenInUse, .authorizedAlways:
+                self.startLocationUpdates()
+            case .denied, .restricted:
+                self.lastError = "GPS 權限未開啟"
+                self.isTracking = false
+            case .notDetermined:
+                break
+            @unknown default:
+                self.lastError = "GPS 權限狀態未知"
+                self.isTracking = false
+            }
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        Task { @MainActor in
+            self.lastError = error.localizedDescription
+            self.isTracking = false
+        }
     }
 
     // MARK: - Upload
@@ -59,7 +109,13 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
         let toUpload = batch
         batch = []
         lastUpload = Date()
-        try? await AlfredAPI.shared.uploadLocation(points: toUpload)
+        do {
+            try await AlfredAPI.shared.uploadLocation(points: toUpload)
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+            batch = toUpload + batch
+        }
     }
 
     // MARK: - Context check（到辦公室/到家）

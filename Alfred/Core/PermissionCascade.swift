@@ -30,6 +30,7 @@ final class PermissionCascade {
         _ = await requestLocationWhenInUse()
         try? await Task.sleep(nanoseconds: 800_000_000)
         _ = await requestLocationAlways()
+        LocationManager.shared.startTracking()
         _ = await requestHealthKit()
         _ = await requestPhotos()
         _ = await requestCamera()

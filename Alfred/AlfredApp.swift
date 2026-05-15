@@ -28,6 +28,7 @@ struct AlfredApp: App {
         .onChange(of: scenePhase) { _, phase in
             BackgroundManager.shared.isAppActive = (phase == .active)
             if phase == .active && UserDefaults.standard.bool(forKey: "alfred_onboarded") {
+                LocationManager.shared.startTracking()
                 Task { await LocationManager.shared.checkContext() }
             }
         }
@@ -54,6 +55,7 @@ struct AlfredApp: App {
 
         if UserDefaults.standard.bool(forKey: "alfred_onboarded") {
             backgroundManager.start()
+            LocationManager.shared.startTracking()
             Task { await healthKit.requestPermissions() }
         }
     }

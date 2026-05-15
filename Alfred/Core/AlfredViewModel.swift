@@ -395,6 +395,7 @@ class AlfredViewModel: NSObject, ObservableObject {
                 }
                 BackgroundManager.shared.start()
                 Task { await HealthKitManager.shared.requestPermissions() }
+                LocationManager.shared.startTracking()
                 Task { await LocationManager.shared.checkContext(announce: false) }
                 Task { await preloadSceneMode(announce: false) }
                 UserDefaults.standard.set(true, forKey: pendingGooglePromptKey)

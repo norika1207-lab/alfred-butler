@@ -9,6 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="/alfred/manifest.json">
 <link rel="apple-touch-icon" href="/alfred/icon.png">
+<link rel="icon" href="/alfred/icon.png" type="image/png">
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
 :root{
@@ -806,7 +807,7 @@ function startGPS() {
         speed:pos.coords.speed, heading:pos.coords.heading,
         accuracy:pos.coords.accuracy, ts:new Date(pos.timestamp).toISOString()});
       clearTimeout(_gpsFlushTimer);
-      _gpsFlushTimer = setTimeout(flushGPS, 30000);
+      _gpsFlushTimer = setTimeout(flushGPS, _gpsBatch.length === 1 ? 2000 : 30000);
     },
     err => console.warn('GPS:', err.message),
     {enableHighAccuracy:true, maximumAge:5000, timeout:10000}
