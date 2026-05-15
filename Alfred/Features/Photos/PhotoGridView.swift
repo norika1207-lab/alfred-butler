@@ -146,7 +146,7 @@ struct PhotoGridView: View {
     }
 
     private func uploadForAnalysis(imageData: Data) async throws -> String {
-        let url = URL(string: "https://YOUR_BACKEND_HOST/alfred/api/analyze-photo")!
+        let url = URL(string: "https://alfred.31.97.221.240.nip.io/alfred/api/analyze-photo")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         if let t = AlfredAPI.shared.token {

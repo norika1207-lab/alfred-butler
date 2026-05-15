@@ -26,88 +26,99 @@ class AlfredViewModel: NSObject, ObservableObject {
     @Published var documentUploadRequest: DocumentUploadRequest? = nil
     @Published private(set) var currentSceneMode: String = "unknown"
 
-    // 2026-05-14 加 — Conversational mode:
-    // 按一下大頭像 toggle 此 flag。flag = true 時:
-    //   1) 阿福先說一句歡迎詞「主人您好,阿福會隨時為您服務,您有需要請隨時跟阿福說」
-    //   2) 阿福說完自動 startListening (continuous loop)
-    //   3) 每次 state 回 .idle 自動 restart listening (Combine subscriber 監聽)
-    //   4) 主人再按一下 toggle false → 退出 + 「好的主人,阿福先在這候命」
+    // 阿福模式：按一下大頭像開啟整天聆聽。
+    // 平常只做逐字稿與生活觀察；只有聽到「阿福，我要你...」才把命令送進 chat handler。
     @Published var conversationalMode: Bool = false
-
-    private var conversationalCancellables: Set<AnyCancellable> = []
+    @Published var showAlfredModeDisclosure: Bool = false
 
     enum AlfredState { case idle, listening, thinking, speaking }
 
     override init() {
         super.init()
-        setupConversationalLoop()
     }
 
-    /// 監聽 state 變化:
-    /// - state 回 .idle + conversationalMode → 自動 restart listening
-    /// - state 進 .listening + conversationalMode → 啟動 VAD 偵測靜音自動 stop
-    private func setupConversationalLoop() {
-        $state
-            .removeDuplicates()
-            .sink { [weak self] newState in
-                guard let self else { return }
-                if newState == .listening && self.conversationalMode {
-                    // 進入聆聽 → 啟動 VAD,靜音 1.5s 自動 stop
-                    self.audio.onSilenceDetected = { [weak self] in
-                        guard let self else { return }
-                        NSLog("[Conversational] VAD triggered stop")
-                        self.stopListening()
-                    }
-                    self.audio.startVAD()
-                } else if newState == .idle && self.conversationalMode {
-                    // 回 .idle (TTS 完成 / 處理結束) → 自動 restart listening
-                    Task { @MainActor in
-                        // delay 一下,避免 TTS 餘音被當主人講話
-                        try? await Task.sleep(nanoseconds: 700_000_000)
-                        guard self.conversationalMode, self.state == .idle else { return }
-                        NSLog("[Conversational] auto-restart listening (state back to idle)")
-                        self.startListening()
-                    }
-                } else if newState != .listening {
-                    // 離開 listening (thinking/speaking) → 確保 VAD 停掉
-                    self.audio.stopVAD()
-                }
-            }
-            .store(in: &conversationalCancellables)
-    }
-
-    /// 大頭像 tap 入口 — toggle conversational mode
+    /// 大頭像 tap 入口 — 每次開啟前都先顯示明確聆聽宣告。
     func toggleConversationalMode() {
         if conversationalMode {
-            // exit
-            NSLog("[Conversational] exit (was %@)", String(describing: state))
-            conversationalMode = false
-            // 停掉錄音 (如果在錄)
-            if audio.isRecording {
-                _ = audio.stopRecording()
-            }
-            speechGeneration += 1
-            audio.stopPlayback()
-            state = .idle
-            Task {
-                await speakText("好的主人，阿福先在這候命。再叫我的時候按一下我。")
-                state = .idle
-            }
+            stopAlfredMode()
         } else {
-            // enter — 阿福先說歡迎詞,TTS 完 .idle observer 會自動 startListening
-            NSLog("[Conversational] enter")
-            conversationalMode = true
-            speechGeneration += 1
-            audio.stopPlayback()
-            // 確保 alfredText 清空 (除非 onboarding)
-            if UserDefaults.standard.bool(forKey: "alfred_onboarded") {
-                alfredText = ""
-            }
-            Task {
-                await speakText("主人您好，阿福會隨時為您服務，您有需要請隨時跟阿福說。")
-                state = .idle  // 觸發 Combine sink → 自動 startListening
+            requestAlfredModeDisclosure()
+        }
+    }
+
+    func requestAlfredModeDisclosure() {
+        guard UserDefaults.standard.bool(forKey: "alfred_onboarded") else { return }
+        showAlfredModeDisclosure = true
+    }
+
+    func confirmAlfredModeDisclosure() {
+        showAlfredModeDisclosure = false
+        startAlfredModeIfNeeded(reason: "manual_disclosure_confirmed")
+    }
+
+    func cancelAlfredModeDisclosure() {
+        showAlfredModeDisclosure = false
+    }
+
+    private func startAlfredModeIfNeeded(reason: String) {
+        guard !conversationalMode else { return }
+        guard UserDefaults.standard.bool(forKey: "alfred_onboarded") else { return }
+        NSLog("[AlfredMode] enter reason=%@", reason)
+        conversationalMode = true
+        speechGeneration += 1
+        audio.stopPlayback()
+        alfredText = ""
+        AmbientRecorder.shared.onCommandDetected = { [weak self] command in
+            guard let self else { return }
+            Task { @MainActor in
+                guard self.conversationalMode else { return }
+                NSLog("[AlfredMode] command detected: %@", command)
+                self.userText = "「\(command)」"
+                await self.sendMessage(command)
             }
         }
+        AmbientRecorder.shared.onReplyText = { [weak self] reply in
+            guard let self else { return }
+            Task { @MainActor in
+                guard self.conversationalMode else { return }
+                NSLog("[AlfredMode] quick reply: %@", reply)
+                await self.speakText(reply)
+            }
+        }
+        AmbientRecorder.shared.onStopRequested = { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                self.stopAlfredMode()
+            }
+        }
+        AmbientRecorder.shared.start(
+            label: "阿福模式 \(Self.sessionLabel())",
+            triggerMessage: "阿福模式開啟：整天聆聽需求與生活脈絡，只有明確喚醒句才執行。",
+            chunkInterval: 8
+        )
+        BackgroundManager.shared.scheduleAlfredModeTransparencyNotices()
+        Task { await speakText("主人，阿福模式已開啟。我會在本地判斷人聲，沒有聲音不會上傳；您叫我阿福時，我會回應您。") }
+        state = .idle
+    }
+
+    private func stopAlfredMode() {
+        NSLog("[AlfredMode] exit")
+        conversationalMode = false
+        showAlfredModeDisclosure = false
+        AmbientRecorder.shared.onCommandDetected = nil
+        AmbientRecorder.shared.onReplyText = nil
+        AmbientRecorder.shared.onStopRequested = nil
+        AmbientRecorder.shared.stop()
+        BackgroundManager.shared.cancelAlfredModeTransparencyNotices()
+        speechGeneration += 1
+        audio.stopPlayback()
+        state = .idle
+    }
+
+    private static func sessionLabel() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f.string(from: Date())
     }
 
     var statusLine: String? {
@@ -169,7 +180,7 @@ class AlfredViewModel: NSObject, ObservableObject {
             do {
                 let resp = try await api.greet()
                 isFirstLaunch = resp.firstTime ?? false
-                // 已認證的啟動流程保持安靜；主人按住按鈕時，阿福不能搶麥。
+                // 上架安全：阿福模式不自動開麥。主人每次進 App 按下並看過宣告後才啟用。
                 Task { await LocationManager.shared.checkContext(announce: false) }
                 Task { await preloadSceneMode(announce: false) }
             } catch {
@@ -376,10 +387,11 @@ class AlfredViewModel: NSObject, ObservableObject {
             if wantsGoogle || declinesGoogle || isShortReply {
                 UserDefaults.standard.set(false, forKey: pendingGooglePromptKey)
                 if wantsGoogle && !declinesGoogle {
-                    let reply = "好的主人，我為您準備 Google 連結。完成後，阿福就能協助查 Drive、分析資料，並在您確認後安排日曆。"
-                    ConversationLog.shared.log(role: "assistant", text: reply, action: "google_link_prompt_accept")
+                    let urlString = "https://alfred.31.97.221.240.nip.io/alfred/api/gcal/authorize?label=personal"
+                    let reply = "好的主人，我幫您打開 Google 授權連結。完成後，阿福就能協助查 Drive、分析資料，並在您確認後安排日曆。"
+                    ConversationLog.shared.log(role: "assistant", text: reply, action: "google_link_prompt_open")
                     await speakText(reply)
-                    card = CardData(title: "連結 Google 帳號", content: "連結後阿福可以查詢與分析 Google Drive 資料，並在主人確認後安排行事曆。", type: "oauth_link", url: "https://YOUR_BACKEND_HOST/alfred/api/gcal/authorize?label=personal", buttonTitle: "前往 Google 授權")
+                    if let url = URL(string: urlString) { await UIApplication.shared.open(url) }
                     state = .idle
                     return
                 } else {
@@ -482,9 +494,8 @@ class AlfredViewModel: NSObject, ObservableObject {
     }
 
     private func shouldPresentVisualCard(_ card: CardData) -> Bool {
-        if card.url != nil { return true }
         let type = (card.type ?? "").lowercased()
-        let visualTypes = ["document", "file", "image", "photo", "photos", "oauth", "auth", "integration", "messaging"]
+        let visualTypes = ["image", "photo", "photos", "product_list"]
         return visualTypes.contains(type)
     }
 
@@ -503,16 +514,11 @@ class AlfredViewModel: NSObject, ObservableObject {
         if asksLine || (asksTextChannel && normalized.contains("阿福")) {
             let setup = try? await api.setupStatus()
             let botId = setup?.line.botId?.isEmpty == false ? setup!.line.botId! : "@222ouqpj"
-            let reply = "可以的主人。如果現在不方便講話，可以用 Line 跟阿福文字對話。我把加入好友按鈕放好了。"
-            ConversationLog.shared.log(role: "assistant", text: reply, action: "line_link_card")
+            let urlString = "https://line.me/R/ti/p/\(botId)"
+            let reply = "可以的主人。如果現在不方便講話，可以用 Line 跟阿福文字對話。我幫您打開加入好友連結。"
+            ConversationLog.shared.log(role: "assistant", text: reply, action: "line_link_open")
             await speakText(reply)
-            card = CardData(
-                title: "加入阿福 Line 好友",
-                content: "加入後，主人不方便開口時，可以直接用 Line 傳文字給阿福。",
-                type: "integration_link",
-                url: "https://line.me/R/ti/p/\(botId)",
-                buttonTitle: "加入 Line 好友"
-            )
+            if let url = URL(string: urlString) { await UIApplication.shared.open(url) }
             state = .idle
             return true
         }
@@ -520,16 +526,11 @@ class AlfredViewModel: NSObject, ObservableObject {
         if asksTelegram {
             let setup = try? await api.setupStatus()
             let username = setup?.telegram.botUsername?.isEmpty == false ? setup!.telegram.botUsername! : "alfred_demo_bot"
-            let reply = "可以的主人。我把 Telegram 連結準備好了，打開後按 Start，阿福就能記住這個對話。"
-            ConversationLog.shared.log(role: "assistant", text: reply, action: "telegram_link_card")
+            let urlString = "https://t.me/\(username)"
+            let reply = "可以的主人。我幫您打開 Telegram 連結，打開後按 Start，阿福就能記住這個對話。"
+            ConversationLog.shared.log(role: "assistant", text: reply, action: "telegram_link_open")
             await speakText(reply)
-            card = CardData(
-                title: "連結阿福 Telegram",
-                content: "開啟 Telegram 後按 Start，之後主人也能用 Telegram 傳文字給阿福。",
-                type: "integration_link",
-                url: "https://t.me/\(username)",
-                buttonTitle: "開啟 Telegram"
-            )
+            if let url = URL(string: urlString) { await UIApplication.shared.open(url) }
             state = .idle
             return true
         }
@@ -547,16 +548,11 @@ class AlfredViewModel: NSObject, ObservableObject {
                 return false
             }
             guard asksConnection || normalized.contains("授權") else { return false }
-            let reply = "好的主人，我為您準備 Google 連結。完成後，阿福就能協助查 Drive、分析資料，並在您確認後安排日曆。"
-            ConversationLog.shared.log(role: "assistant", text: reply, action: "google_link_card")
+            let urlString = "https://alfred.31.97.221.240.nip.io/alfred/api/gcal/authorize?label=personal"
+            let reply = "好的主人，我幫您打開 Google 授權連結。完成後，阿福就能協助查 Drive、分析資料，並在您確認後安排日曆。"
+            ConversationLog.shared.log(role: "assistant", text: reply, action: "google_link_open")
             await speakText(reply)
-            card = CardData(
-                title: "連結 Google 帳號",
-                content: "連結後阿福可以查詢與分析 Google Drive 資料，並在主人確認後安排行事曆。",
-                type: "oauth_link",
-                url: "https://YOUR_BACKEND_HOST/alfred/api/gcal/authorize?label=personal",
-                buttonTitle: "前往 Google 授權"
-            )
+            if let url = URL(string: urlString) { await UIApplication.shared.open(url) }
             state = .idle
             return true
         }
@@ -586,6 +582,13 @@ class AlfredViewModel: NSObject, ObservableObject {
             // 3 秒後自動收起翻譯覆層
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             translationOverlay = nil
+            state = .idle
+
+        case "open_url":
+            await speakText(fullText)
+            if let urlString = action["url"], let url = URL(string: urlString) {
+                await UIApplication.shared.open(url)
+            }
             state = .idle
 
         case "request_upload":

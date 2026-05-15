@@ -459,6 +459,7 @@ async function sendMsg(msg) {
   saveHistory();
 
   const replyEl = document.getElementById('afu-reply');
+  cancelTypeWrite();
   replyEl.textContent = '';
 
   try {
@@ -601,11 +602,23 @@ function handleSubApp(action) {
 }
 
 // ── typeWrite (fallback) ──────────────────────────────────────────────────────
+let typeWriteTimer = null;
+function cancelTypeWrite() {
+  if (typeWriteTimer) {
+    clearInterval(typeWriteTimer);
+    typeWriteTimer = null;
+  }
+}
 function typeWrite(text) {
   const el = document.getElementById('afu-reply');
+  cancelTypeWrite();
   el.textContent = ''; let i = 0;
-  const t = setInterval(() => {
-    if (i < text.length) { el.textContent += text[i++]; } else clearInterval(t);
+  typeWriteTimer = setInterval(() => {
+    if (i < text.length) {
+      el.textContent += text[i++];
+    } else {
+      cancelTypeWrite();
+    }
   }, 18);
   if (text.includes('開始錄音') || text.includes('我開始錄')) setTimeout(startMeeting, 500);
   else if ((text.includes('整理會議') || text.includes('停止錄音')) && typeof _recorder !== 'undefined' && _recorder) setTimeout(stopMeeting, 300);

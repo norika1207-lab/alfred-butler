@@ -1,10 +1,30 @@
 import Foundation
 
+struct AmbientChunkResponse: Decodable {
+    let ok: Bool
+    let skipped: Bool?
+    let reason: String?
+    let commandDetected: Bool?
+    let commandText: String?
+    let controlAction: String?
+    let replyText: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case skipped
+        case reason
+        case commandDetected = "command_detected"
+        case commandText = "command_text"
+        case controlAction = "control_action"
+        case replyText = "reply_text"
+    }
+}
+
 // MARK: - Alfred API Client (完整版)
 
 class AlfredAPI {
     static let shared = AlfredAPI()
-    private let base = "https://YOUR_BACKEND_HOST/alfred/api"
+    private let base = "https://alfred.31.97.221.240.nip.io/alfred/api"
     private let session = URLSession.shared
 
     // MARK: - Token（UserDefaults，app 內共享）
@@ -269,7 +289,8 @@ class AlfredAPI {
         return sid
     }
 
-    func ambientUploadChunk(sessionId: Int, fileURL: URL) async throws {
+    @discardableResult
+    func ambientUploadChunk(sessionId: Int, fileURL: URL) async throws -> AmbientChunkResponse {
         let url = URL(string: "\(base)/ambient/chunk/\(sessionId)")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -284,10 +305,11 @@ class AlfredAPI {
         body.append(audio)
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
         req.httpBody = body
-        let (_, resp) = try await session.upload(for: req, from: body)
+        let (data, resp) = try await session.upload(for: req, from: body)
         if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             throw URLError(.badServerResponse)
         }
+        return try JSONDecoder().decode(AmbientChunkResponse.self, from: data)
     }
 
     func ambientStop(sessionId: Int) async throws {

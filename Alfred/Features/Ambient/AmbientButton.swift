@@ -6,6 +6,7 @@ import SwiftUI
 // 不顯示「正在錄音」文字 — 主人開會用，介面要低調。
 struct AmbientButton: View {
     @ObservedObject private var recorder = AmbientRecorder.shared
+    @ObservedObject private var vm = AlfredViewModel.shared
     @State private var glow: CGFloat = 0.0   // 0..1 呼吸動畫值
 
     private let gold       = Color(red: 0.788, green: 0.659, blue: 0.298)   // #c9a84c
@@ -22,7 +23,7 @@ struct AmbientButton: View {
             let h = UIImpactFeedbackGenerator(style: .medium)
             h.impactOccurred()
             #endif
-            recorder.toggle()
+            vm.toggleConversationalMode()
         } label: {
             ZStack {
                 // 外圈呼吸金光（錄音中才有）
@@ -83,10 +84,10 @@ struct AmbientButton: View {
                 glow = 1.0
             }
         }
-        .accessibilityLabel(recorder.isRecording ? "停止辦公錄音" : "開始辦公錄音")
+        .accessibilityLabel(recorder.isRecording ? "關閉阿福模式" : "開啟阿福模式")
         .accessibilityHint(recorder.isRecording
-            ? "正在錄音，將每 120 秒自動切段上傳，6 小時做一次小結。"
-            : "按一下開始連續錄音；阿福不會插話，只默默做今日綜合日誌。")
+            ? "阿福正在聆聽有聲片段。再按一次會關閉，也可以說阿福你先不要聽。"
+            : "按一下會先顯示聆聽宣告，確認後才開啟阿福模式。")
     }
 }
 

@@ -138,6 +138,27 @@ class BackgroundManager: ObservableObject {
         }
     }
 
+    // MARK: - 阿福模式透明提醒
+    func scheduleAlfredModeTransparencyNotices() {
+        requestNotificationPermission()
+        cancelAlfredModeTransparencyNotices()
+        let content = UNMutableNotificationContent()
+        content.title = "阿福模式仍在開啟中"
+        content.body = "主人，阿福仍在陪伴您。有聲片段才會轉成逐字稿；若要暫停，請說：阿福你先不要聽。"
+        content.sound = nil
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 2 * 3600, repeats: true)
+        let request = UNNotificationRequest(identifier: alfredModeNoticeId, content: content, trigger: trigger)
+        UNUserNotificationCenter.current().add(request) { err in
+            if let err { print("[BackgroundManager] alfred mode notice error:", err) }
+        }
+    }
+
+    func cancelAlfredModeTransparencyNotices() {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [alfredModeNoticeId])
+    }
+
+    private var alfredModeNoticeId: String { "alfred-mode-notice-2h-repeat" }
+
     // MARK: - 通知工具
     private func requestNotificationPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }

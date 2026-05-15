@@ -3,7 +3,7 @@
 
 <!-- BEGIN AUTO_STATUS -->
 
-## ⭐ 開發進度表(自動生成 — last: 2026-05-14 00:44)
+## ⭐ 開發進度表(自動生成 — last: 2026-05-15 18:50)
 
 > **這份是必讀。Alfred 整個進度都在這。**
 > 由 `scripts/generate_status.py` 掃 codebase 自動生成,**不要手動改這段(`<!-- BEGIN/END AUTO_STATUS -->` 之間)**。
@@ -13,17 +13,17 @@
 
 | 維度 | 數量 |
 |---|---:|
-| `backend/main.py` 行數 | 15,270 |
-| API endpoints(`@app.*`)| 144 |
-| LLM tools | 68 |
-| Fastpath 函數(zero LLM)| 15 |
+| `backend/main.py` 行數 | 16,715 |
+| API endpoints(`@app.*`)| 145 |
+| LLM tools | 69 |
+| Fastpath 函數(zero LLM)| 17 |
 | DB tables(`CREATE TABLE`)| 71 |
 | Backend service modules | 9 |
-| Populate seed scripts | 5 |
+| Populate seed scripts | 6 |
 | Scrapers in tree | 11 |
-| iOS Swift 檔 | 26 個,共 4,991 行 |
+| iOS Swift 檔 | 26 個,共 5,269 行 |
 | voice_bank 預錄 mp3 | 3,061 個 |
-| `alfred.db` 大小 | 242 MB |
+| `alfred.db` 大小 | 244 MB |
 | 主人上傳分析過的檔案 | 41 |
 
 ### Fastpath 函數(zero LLM 秒答)
@@ -37,11 +37,13 @@
 | `_maybe_handle_integration_link_fastpath` | 通訊連結(LINE / Telegram / WhatsApp) |
 | `_maybe_handle_attendance_fastpath` | 出勤記錄 |
 | `_maybe_handle_google_auth_status_fastpath` | Google 授權狀態 |
+| `_maybe_handle_anniversary_fastpath` | — |
 | `_maybe_handle_quick_lists_fastpath` | 快速列表(todo / expense / ...) |
 | `_maybe_handle_math_fastpath` | 純數學(BUTLER_BRAIN 第 13 鐵則) |
 | `_maybe_handle_shopping_fastpath` | 比價(The Commerce Crack) |
 | `_maybe_handle_travel_fastpath` | 旅遊規劃(populate_travel.py DB 接上時) |
 | `_maybe_handle_nearby_fastpath` | — |
+| `_maybe_handle_news_fastpath` | — |
 | `_maybe_handle_weather_fastpath` | — |
 | `_maybe_handle_restaurant_fastpath` | 餐廳搜尋 |
 | `_maybe_handle_file_search_fastpath` | 檔案搜尋(vault + drive + mac) |
@@ -87,24 +89,24 @@
 |---|---:|---|
 | `Alfred/AlfredApp.swift` | 60 | App 入口 + consent gate |
 | `Alfred/Core/AfuBrainGate.swift` | 213 | MASL gate,destructive action 本地擋 |
-| `Alfred/Core/AlfredAPI.swift` | 551 | 後端 API client(含 SSE stream) |
-| `Alfred/Core/AlfredViewModel.swift` | 759 | 主 ViewModel,狀態機,action dispatch |
+| `Alfred/Core/AlfredAPI.swift` | 573 | 後端 API client(含 SSE stream) |
+| `Alfred/Core/AlfredViewModel.swift` | 844 | 主 ViewModel,狀態機,action dispatch |
 | `Alfred/Core/AliceFastpath.swift` | 288 | 時間/日期/數學/單位/早安謝謝 zero-LLM(待補 liveness) |
-| `Alfred/Core/AmbientRecorder.swift` | 161 | 被動環境錄音,120s chunk |
-| `Alfred/Core/AudioEngine.swift` | 104 | AVAudioRecorder + AVAudioPlayer |
+| `Alfred/Core/AmbientRecorder.swift` | 222 | 被動環境錄音,120s chunk |
+| `Alfred/Core/AudioEngine.swift` | 178 | AVAudioRecorder + AVAudioPlayer |
 | `Alfred/Core/AuthManager.swift` | 177 | JWT + Keychain(原 legacy 名,實際多處使用) |
-| `Alfred/Core/BackgroundManager.swift` | 172 | reminder / family alert / visit prep 輪詢 |
+| `Alfred/Core/BackgroundManager.swift` | 193 | reminder / family alert / visit prep 輪詢 |
 | `Alfred/Core/ConversationLog.swift` | 44 | 對話歷史寫到 Documents/ |
 | `Alfred/Core/HealthKitManager.swift` | 138 | HealthKit + workout sync |
 | `Alfred/Core/LocationManager.swift` | 75 | CLLocationManager + /api/location/update |
 | `Alfred/Core/PermissionCascade.swift` | 145 | 漸進式權限請求 |
 | `Alfred/Core/PhotosManager.swift` | 91 | iOS Photos 權限 + 選圖 |
 | `Alfred/Core/VoiceBankPlayer.swift` | 90 | 🔴 卸下待補 — 預錄 mp3 抽取播放(0 引用) |
-| `Alfred/Features/Ambient/AmbientButton.swift` | 104 | 金色環,長按啟動 ambient |
+| `Alfred/Features/Ambient/AmbientButton.swift` | 105 | 金色環,長按啟動 ambient |
 | `Alfred/Features/Attendance/AttendanceView.swift` | 231 | 出勤記錄 view |
 | `Alfred/Features/Auth/ConsentView.swift` | 171 | 第三方 AI 同意聲明(首次啟動) |
 | `Alfred/Features/Auth/LoginView.swift` | 133 | 🔴 legacy email 登入,平時不顯示 |
-| `Alfred/Features/Chat/AlfredView.swift` | 388 | 主畫面,語音按鈕 + AmbientButton overlay |
+| `Alfred/Features/Chat/AlfredView.swift` | 402 | 主畫面,語音按鈕 + AmbientButton overlay |
 | `Alfred/Features/Family/FamilyView.swift` | 173 | 家人狀態 view |
 | `Alfred/Features/Office/OfficeDashboardView.swift` | 247 | Office dashboard(eod/rooms/...) |
 | `Alfred/Features/Office/OfficeViewModel.swift` | 111 | Office API client |
@@ -131,6 +133,7 @@
 | `backend/populate_michelin_hotels.py` | 🟡 待補 — 米其林飯店 seed |
 | `backend/populate_taiwan_restaurants.py` | 🟡 待補 — 台灣餐廳 seed |
 | `backend/populate_travel.py` | 🟡 待補 — 旅遊行程 seed(BUTLER_BRAIN 第 4 經典案例) |
+| `backend/populate_travel_rich.py` | — |
 
 ### Backend Scrapers
 
@@ -159,7 +162,7 @@
 
 | 類別 | 數量 / 內容 |
 |---|---|
-| `*.bak*` 檔案 | 102 個 |
+| `*.bak*` 檔案 | 105 個 |
 | 備份資料夾 | ResourceBackups |
 | 舊快照 | ios_latest.zip, ios_app, ios |
 
@@ -168,6 +171,18 @@
 **最近 20 commits**:
 
 ```
+313dc4c docs: 整理 2026-05-14 整日修法總結進 README
+0090dfa feat(ios): conversational mode — 大頭像 tap toggle, 不再 push-to-talk
+b7a0842 fix(anniversary_fastpath): sort key=days only — 避免 person=None 跟 int 比較 TypeError
+cd2556f fix(anniversary_fastpath): 連 shared alfred.db 不要走 per-user db (anniversaries 是 singleton owner 資料)
+8061dce fix: anniversary_fastpath — 主人問紀念日強制走 DB, 不靠 LLM 選對 tool
+722517a fix(travel): 4 層 paranoid defence 徹底治旅遊「沒資料」hallucination
+087d6fd fix(travel): 國家層級 keyword fallback — 主人講「日本」也要給方案不能說沒資料
+1978d5e chore: 中斷點 — iOS build 卡在 iOS 26.2 SDK 缺,公司 Mac 移動暫停
+1fa915a fix(chat): 5/14 早上 6 個答非所問 case root cause 修法
+e92be48 fix(ios audio): TTS 雜音 root cause — 三個 player 統一 AVAudioSession 設定
+1ec91ef feat(identity): owner_identity singleton + LINE/TG gate (Bug 修法 a)
+c9e8154 fix: LINE 對話邏輯 — fastpath chain + 餐飲意圖 + 區名 + history
 d258ab7 feat: POI Crack A01 — OSM Overpass 全台 35,845 餐廳 + nearby fastpath
 f444905 feat: weather fastpath — 主人問天氣不打 LLM,48s -> 2s
 5c3cc68 feat: anniversary 主動鏈 — 30/7/1/0 天前自動推送
@@ -176,33 +191,21 @@ f444905 feat: weather fastpath — 主人問天氣不打 LLM,48s -> 2s
 523594e feat: extras/ — scale-up indexer tools + scrapers
 2f1c513 auto: update README.md
 e1c03ae auto: update README.md
-0054ed0 docs: add BUTLER_BRAIN.md + ALFRED_SCENARIOS.md (Alfred design DNA) (#1)
-6badec9 docs: WTF.md — 完整雙 Phase 報告，可驗證數字
-f1e3bad feat(index): Phase 2 — 20 Agent 商品索引引擎
-5c8c4da Add PayEasy scraper (members-only, session-required)
-1d6cdb6 docs: PRICE_HUNT.md — 用戶導向完整產品說明文件
-18e002b docs: rewrite SHOP_ENGINE.md — Commerce Crack methodology + WOW narrative
-52f36cd docs: Operation AllIn 完整紀錄 + 可驗證 benchmark 數據
-16ec33b feat(shop): Operation AllIn 完成 — 15站並發比價引擎 + 比價王聚合
-66c3b22 Add Ruten (露天) scraper to shop price engine
-c357753 Add biggo scraper for multi-store price comparison
-8eed232 feat(shop): 12站並發比價引擎完成 — 博客來/松果/東森/Yahoo/家樂福/生活市集/特力屋/全國電子/酷澎/Pinkoi
-17f8684 Add tkec (燦坤) product search scraper
 ```
 
 **rollback tags**(最近 10):
 
 ```
-post_conv_logic_fix_20260514
-pre_conv_logic_fix_20260514
-post_poi_crack_a01_20260514
-pre_poi_crack_a01_20260514
-post_weather_fastpath_20260514
-pre_weather_fastpath_20260514
-post_anniversary_nudge_20260513
-pre_anniversary_nudge_20260513
-post_biggo_and_care_push_20260513
-pre_scrapers_and_care_push_20260513
+post_alfred_always_on_20260515
+post_alfred_explicit_listening_consent_20260515
+post_alfred_mode_ambient_20260515
+post_alfred_mode_local_notice_20260515
+post_alfred_notice_repeat_20260515
+post_ambient_local_vad_20260515
+post_ambient_transcript_tool_20260515
+post_app_store_strategy_docs_20260515
+post_demo_regression_hardening_20260515
+post_full_regression_zero_ui_20260515
 ```
 
 ### 順藤摸瓜 — 我是新接手的人,該怎麼讀?
@@ -627,13 +630,35 @@ private func authorized(_ req: inout URLRequest) {
 
 ### ✅ 已處理
 - **5.1.2(i) 第三方 AI 同意**：首次啟動顯示 `ConsentView`，明確列出 Google Gemini、ElevenLabs
-- **2.5.14 被動錄音指示器**：畫面上有常駐閃爍指示器
+- **2.5.14 被動錄音指示器**：阿福模式開啟時畫面顯示狀態，iOS 也會顯示系統麥克風指示
+- **阿福模式 explicit opt-in**：不自動開麥；每次開啟都必須主人進 App 按下並看到宣告後確認
+- **靜音不處理**：手機本地先判斷有無聲音，無聲片段直接丟棄，不上傳、不轉逐字稿
+- **透明提醒**：阿福模式開啟後每 2 小時排一次本機通知；1 小時太打擾，3 小時太久，2 小時是透明度與低干擾的折衷
+- **隨時關閉**：可按鈕關閉，也可說「阿福你先關閉 / 阿福你先不要聽 / 阿福你去休息」
+
+### App Store submission strategy
+
+對 Apple 與陌生用戶，阿福模式的外部定位不是「全天候監聽 AI 管家」，而是：
+
+> **A user-initiated personal voice journaling and life-log assistant.**
+
+中文定位：**使用者主動開啟的私人語音日誌與生活記憶整理工具。**
+
+阿福模式把有聲片段轉成私人逐字稿，整理成生活日誌、會議記錄、待辦、承諾與創意靈感。管家功能是逐字稿與生活日誌的後處理工具箱：主人明確要求或確認後，才使用找文件、查行事曆、草擬訊息、寄信等工具。
+
+App Review Notes 建議文案：
+
+```text
+Alfred Mode is an opt-in personal voice journaling and meeting-notes feature. Each session must be manually started by the user after an in-app disclosure. The app only uploads audio segments that contain detected speech; silent segments are discarded locally. Transcripts are used to generate private life logs, meeting notes, reminders, follow-up tasks, and creative reflections. The user can stop recording at any time from the app or by voice command. The app also sends periodic local reminders while Alfred Mode is active. Additional assistant tools, such as file search, calendar help, message drafting, and summaries, are user-initiated or confirmation-gated.
+```
 
 ### ⚠️ 注意事項
 - **背景定位**（2.5.4）：App Review 說明書需提供充分理由
 - **ElevenLabs TTS**：需在隱私政策中揭露
 - **Google OAuth scope**：申請的 scope 需有對應功能說明
 - **HealthKit 資料**：不能傳給第三方 AI（Gemini），需在隱私政策說明
+- **隱私政策必寫**：錄音、有聲片段上傳、逐字稿、AI 處理、保存期限、刪除方式
+- **文案禁用**：不要寫 always listening / background monitoring / 整天監聽 / 偷偷記錄；改寫 personal voice journal / life log / private transcript / user-initiated Alfred Mode
 
 ---
 

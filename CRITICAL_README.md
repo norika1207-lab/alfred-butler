@@ -126,7 +126,20 @@ func tts(text: String) async throws -> Data {
 
 所有 service 都跑在 `YOUR_SERVER` user 下。Kill 任何 process 前先確認是什麼。
 
+
 ---
+
+## App Store / 阿福模式審查策略
+
+阿福模式不可描述成「全天候監聽」。上架版定位是：**使用者主動開啟的私人語音日誌與生活記憶整理工具**。
+
+強制規則：
+- 不自動開麥；每次開啟都必須主人進 App 按下並看見宣告。
+- 開啟中必須有明確狀態，並每 2 小時發本機透明提醒。
+- 沒有聲音的片段本地丟棄，不上傳、不轉逐字稿。
+- 主人可按鈕關閉，也可說「阿福你先關閉 / 阿福你先不要聽 / 阿福你去休息」。
+- 找文件、寄 Email、傳訊息、改行事曆等對外或敏感動作，必須由主人要求或確認。
+- App Store 文案用 personal voice journal / life log / private transcript / meeting notes；不要用 always listening / background monitoring / 整天監聽。
 
 ## 已實作功能清單
 

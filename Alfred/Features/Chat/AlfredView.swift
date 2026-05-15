@@ -3,9 +3,9 @@ import UIKit
 import UniformTypeIdentifiers
 
 // MARK: - 主畫面（零介面）
-// 2026-05-14: 從 push-to-talk 改為 conversational mode toggle
-// 按一下 → 阿福主動歡迎 → 進入持續聆聽 → 自然多輪對話 → 再按一下退出
-// 介面保留不動,只改大頭像的互動模式。
+// 大頭像按一下 → 每次先顯示聆聽宣告，主人確認後才開啟阿福模式。
+// 只有「阿福，我要你...」明確喚醒句才觸發任務；可用語音請阿福休息。
+// 介面保留不動，只在模式開啟時顯示一行狀態。
 
 struct AlfredView: View {
     @StateObject private var vm = AlfredViewModel.shared
@@ -19,7 +19,19 @@ struct AlfredView: View {
             VStack(spacing: 0) {
                 Spacer()
 
-                // 阿福頭像（按一下進入/退出對話模式）
+                if vm.conversationalMode {
+                    Text("阿福模式開啟，阿福將會整天聆聽您的需求陪伴在您身邊。")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(Color(hex: "#e8d5b7"))
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(4)
+                        .padding(.horizontal, 28)
+                        .transition(.opacity)
+
+                    Spacer().frame(height: 16)
+                }
+
+                // 阿福頭像（按一下進入/退出阿福模式）
                 AlfredAvatarView(state: vm.state, isPressing: vm.conversationalMode)
                     .gesture(
                         TapGesture()
@@ -95,6 +107,12 @@ struct AlfredView: View {
             }
         }
         .animation(.easeInOut(duration: 0.3), value: vm.translationOverlay?.id)
+        .alert("開啟阿福模式", isPresented: $vm.showAlfredModeDisclosure) {
+            Button("開啟阿福模式") { vm.confirmAlfredModeDisclosure() }
+            Button("取消", role: .cancel) { vm.cancelAlfredModeDisclosure() }
+        } message: {
+            Text("開啟後，阿福會使用麥克風聆聽有聲片段，將內容上傳至阿福後端轉成逐字稿，用來整理摘要、會議記錄與待辦。沒有聲音的片段不會上傳或轉錄。您可以隨時再按一次關閉，也可以說：阿福你先關閉、阿福你先不要聽、阿福你去休息。下次要開啟時，請回到 App 再次確認。")
+        }
         // 金色被動錄音鈕（介面正上方，按下沉並閃金光；不觸發 AI 回應）
         .overlay(alignment: .top) {
             AmbientButton()

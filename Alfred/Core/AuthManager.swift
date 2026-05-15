@@ -14,7 +14,7 @@ class AuthManager: ObservableObject {
     @Published var subscription: String = "trial"
     @Published var trialRemaining: Int = 50
 
-    private let base = "https://YOUR_BACKEND_HOST/alfred/api"
+    private let base = "https://alfred.31.97.221.240.nip.io/alfred/api"
     private let keychainKey = "alfred_jwt_token"
 
     init() {

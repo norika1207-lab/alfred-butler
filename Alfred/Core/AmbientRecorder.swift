@@ -3,8 +3,9 @@ import AVFoundation
 import Combine
 
 // MARK: - Ambient Recorder
-// 被動錄音：按金色圓鈕一下就開始連續錄，每 120 秒切一份 m4a 上傳給後端轉逐字稿。
-// 不觸發 AI 回應，UI 不會顯示對話氣泡 — 主人開會專用。
+// 被動錄音：本地先用低成本音量偵測判斷有沒有人聲。
+// 沒有人聲的片段直接丟棄，不上傳、不轉錄、不生成逐字稿。
+// 一般 ambient 不觸發 AI 回應；阿福模式只在明確「阿福，我要你...」喚醒句時執行。
 @MainActor
 final class AmbientRecorder: NSObject, ObservableObject {
     static let shared = AmbientRecorder()
@@ -16,7 +17,15 @@ final class AmbientRecorder: NSObject, ObservableObject {
     private var recorder: AVAudioRecorder?
     private var currentURL: URL?
     private var rotateTimer: Timer?
-    private let chunkInterval: TimeInterval = 120   // 120 秒
+    private var meteringTask: Task<Void, Never>?
+    private var chunkHasSpeech = false
+    private let speechThresholdDb: Float = -45.0
+    private let speechFramesNeeded = 3
+    private let defaultChunkInterval: TimeInterval = 120   // 一般 ambient: 120 秒
+    private var activeChunkInterval: TimeInterval = 120
+    var onCommandDetected: ((String) -> Void)?
+    var onReplyText: ((String) -> Void)?
+    var onStopRequested: (() -> Void)?
 
     private let chunkDir: URL = {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -29,8 +38,9 @@ final class AmbientRecorder: NSObject, ObservableObject {
         if isRecording { stop() } else { start() }
     }
 
-    func start(label requestedLabel: String? = nil, triggerMessage: String? = nil) {
+    func start(label requestedLabel: String? = nil, triggerMessage: String? = nil, chunkInterval: TimeInterval? = nil) {
         guard !isRecording else { return }
+        activeChunkInterval = chunkInterval ?? defaultChunkInterval
         configureSession()
         Task {
             do {
@@ -52,13 +62,13 @@ final class AmbientRecorder: NSObject, ObservableObject {
         guard isRecording else { return }
         rotateTimer?.invalidate()
         rotateTimer = nil
-        let lastURL = finishCurrentChunk()
+        let lastChunk = finishCurrentChunk()
         let sid = sessionId
         isRecording = false
         sessionId = nil
-        if let url = lastURL, let sid = sid {
+        if let chunk = lastChunk, let sid = sid {
             Task.detached(priority: .background) { [weak self] in
-                await self?.uploadChunk(url: url, sessionId: sid, isFinal: true)
+                await self?.uploadChunkIfVoiced(chunk, sessionId: sid, isFinal: true)
                 try? await AlfredAPI.shared.ambientStop(sessionId: sid)
                 NSLog("[Ambient] stop done")
             }
@@ -97,27 +107,56 @@ final class AmbientRecorder: NSObject, ObservableObject {
         ]
         do {
             let r = try AVAudioRecorder(url: url, settings: settings)
+            r.isMeteringEnabled = true
             r.prepareToRecord()
             r.record()
             self.recorder = r
             self.currentURL = url
+            self.chunkHasSpeech = false
+            self.startMetering()
         } catch {
             NSLog("[Ambient] record start error \(error.localizedDescription)")
         }
     }
 
     @discardableResult
-    private func finishCurrentChunk() -> URL? {
+    private func finishCurrentChunk() -> (url: URL, hasSpeech: Bool)? {
+        meteringTask?.cancel()
+        meteringTask = nil
         recorder?.stop()
         let url = currentURL
+        let hasSpeech = chunkHasSpeech
         recorder = nil
         currentURL = nil
-        return url
+        chunkHasSpeech = false
+        guard let url else { return nil }
+        return (url, hasSpeech)
+    }
+
+    private func startMetering() {
+        meteringTask?.cancel()
+        meteringTask = Task { @MainActor [weak self] in
+            var voicedFrames = 0
+            while !Task.isCancelled {
+                guard let self, let recorder = self.recorder else { return }
+                recorder.updateMeters()
+                let level = recorder.averagePower(forChannel: 0)
+                if level > self.speechThresholdDb {
+                    voicedFrames += 1
+                    if voicedFrames >= self.speechFramesNeeded {
+                        self.chunkHasSpeech = true
+                    }
+                } else {
+                    voicedFrames = max(0, voicedFrames - 1)
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
     }
 
     private func scheduleRotate() {
         rotateTimer?.invalidate()
-        let t = Timer.scheduledTimer(withTimeInterval: chunkInterval, repeats: true) { [weak self] _ in
+        let t = Timer.scheduledTimer(withTimeInterval: activeChunkInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.rotateChunk() }
         }
         // app 在背景時 Timer 也會嘗試 fire；audio background mode 開啟下系統會保活
@@ -127,22 +166,44 @@ final class AmbientRecorder: NSObject, ObservableObject {
 
     private func rotateChunk() {
         guard isRecording, let sid = sessionId else { return }
-        let finishedURL = finishCurrentChunk()
+        let finishedChunk = finishCurrentChunk()
         startNewChunk()  // 立即開新檔，最小化縫隙（~50ms）
-        if let url = finishedURL {
+        if let chunk = finishedChunk {
             Task.detached(priority: .background) { [weak self] in
-                await self?.uploadChunk(url: url, sessionId: sid, isFinal: false)
+                await self?.uploadChunkIfVoiced(chunk, sessionId: sid, isFinal: false)
             }
         }
+    }
+
+    private func uploadChunkIfVoiced(_ chunk: (url: URL, hasSpeech: Bool), sessionId: Int, isFinal: Bool) async {
+        guard chunk.hasSpeech else {
+            NSLog("[Ambient] discard silent chunk \(chunk.url.lastPathComponent) (final=\(isFinal))")
+            try? FileManager.default.removeItem(at: chunk.url)
+            return
+        }
+        await uploadChunk(url: chunk.url, sessionId: sessionId, isFinal: isFinal)
     }
 
     private func uploadChunk(url: URL, sessionId: Int, isFinal: Bool) async {
         // retry 3 次，間隔遞增
         for attempt in 0..<3 {
             do {
-                try await AlfredAPI.shared.ambientUploadChunk(sessionId: sessionId, fileURL: url)
+                let response = try await AlfredAPI.shared.ambientUploadChunk(sessionId: sessionId, fileURL: url)
                 NSLog("[Ambient] uploaded \(url.lastPathComponent) (final=\(isFinal))")
-                await MainActor.run { self.chunksSentThisSession += 1 }
+                await MainActor.run {
+                    self.chunksSentThisSession += 1
+                    if response.controlAction == "stop_alfred_mode" {
+                        self.onStopRequested?()
+                        return
+                    }
+                    if let reply = response.replyText?.trimmingCharacters(in: .whitespacesAndNewlines), !reply.isEmpty {
+                        self.onReplyText?(reply)
+                        return
+                    }
+                    if response.commandDetected == true, let command = response.commandText?.trimmingCharacters(in: .whitespacesAndNewlines), !command.isEmpty {
+                        self.onCommandDetected?(command)
+                    }
+                }
                 try? FileManager.default.removeItem(at: url)
                 return
             } catch {
