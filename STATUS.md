@@ -1,4 +1,4 @@
-## ⭐ 開發進度表(自動生成 — last: 2026-05-15 18:50)
+## ⭐ 開發進度表(自動生成 — last: 2026-05-15 21:16)
 
 > **這份是必讀。Alfred 整個進度都在這。**
 > 由 `scripts/generate_status.py` 掃 codebase 自動生成,**不要手動改這段(`<!-- BEGIN/END AUTO_STATUS -->` 之間)**。
@@ -16,7 +16,7 @@
 | Backend service modules | 9 |
 | Populate seed scripts | 6 |
 | Scrapers in tree | 11 |
-| iOS Swift 檔 | 26 個,共 5,269 行 |
+| iOS Swift 檔 | 26 個,共 5,315 行 |
 | voice_bank 預錄 mp3 | 3,061 個 |
 | `alfred.db` 大小 | 244 MB |
 | 主人上傳分析過的檔案 | 41 |
@@ -85,9 +85,9 @@
 | `Alfred/AlfredApp.swift` | 60 | App 入口 + consent gate |
 | `Alfred/Core/AfuBrainGate.swift` | 213 | MASL gate,destructive action 本地擋 |
 | `Alfred/Core/AlfredAPI.swift` | 573 | 後端 API client(含 SSE stream) |
-| `Alfred/Core/AlfredViewModel.swift` | 844 | 主 ViewModel,狀態機,action dispatch |
+| `Alfred/Core/AlfredViewModel.swift` | 875 | 主 ViewModel,狀態機,action dispatch |
 | `Alfred/Core/AliceFastpath.swift` | 288 | 時間/日期/數學/單位/早安謝謝 zero-LLM(待補 liveness) |
-| `Alfred/Core/AmbientRecorder.swift` | 222 | 被動環境錄音,120s chunk |
+| `Alfred/Core/AmbientRecorder.swift` | 237 | 被動環境錄音,120s chunk |
 | `Alfred/Core/AudioEngine.swift` | 178 | AVAudioRecorder + AVAudioPlayer |
 | `Alfred/Core/AuthManager.swift` | 177 | JWT + Keychain(原 legacy 名,實際多處使用) |
 | `Alfred/Core/BackgroundManager.swift` | 193 | reminder / family alert / visit prep 輪詢 |
@@ -166,6 +166,7 @@
 **最近 20 commits**:
 
 ```
+32fae81 Stabilize Alfred mode and demo regression
 313dc4c docs: 整理 2026-05-14 整日修法總結進 README
 0090dfa feat(ios): conversational mode — 大頭像 tap toggle, 不再 push-to-talk
 b7a0842 fix(anniversary_fastpath): sort key=days only — 避免 person=None 跟 int 比較 TypeError
@@ -185,7 +186,6 @@ f444905 feat: weather fastpath — 主人問天氣不打 LLM,48s -> 2s
 7cf7970 第七視窗整合 — 修速度 / 接 travel_hotels / emotional 主動鏈 / 進度自動化
 523594e feat: extras/ — scale-up indexer tools + scrapers
 2f1c513 auto: update README.md
-e1c03ae auto: update README.md
 ```
 
 **rollback tags**(最近 10):

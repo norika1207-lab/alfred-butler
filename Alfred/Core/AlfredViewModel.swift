@@ -47,7 +47,18 @@ class AlfredViewModel: NSObject, ObservableObject {
     }
 
     func requestAlfredModeDisclosure() {
-        guard UserDefaults.standard.bool(forKey: "alfred_onboarded") else { return }
+        guard UserDefaults.standard.bool(forKey: "alfred_onboarded") else {
+            isFirstLaunch = true
+            alfredText = """
+            主人，阿福模式要先完成主人認證才會開啟。
+
+            請先按住中間對話按鈕，照著這句話完整唸出來：
+
+            「阿福，我是你的主人，我會有很多地方需要你的幫忙，你要幫我把每一件事情處理好。」
+            """
+            Task { await speakText("主人，阿福模式要先完成主人認證才會開啟。請先照著畫面上的句子念一遍。") }
+            return
+        }
         showAlfredModeDisclosure = true
     }
 
@@ -62,12 +73,15 @@ class AlfredViewModel: NSObject, ObservableObject {
 
     private func startAlfredModeIfNeeded(reason: String) {
         guard !conversationalMode else { return }
-        guard UserDefaults.standard.bool(forKey: "alfred_onboarded") else { return }
+        guard UserDefaults.standard.bool(forKey: "alfred_onboarded") else {
+            requestAlfredModeDisclosure()
+            return
+        }
         NSLog("[AlfredMode] enter reason=%@", reason)
         conversationalMode = true
         speechGeneration += 1
         audio.stopPlayback()
-        alfredText = ""
+        alfredText = "阿福模式正在開啟..."
         AmbientRecorder.shared.onCommandDetected = { [weak self] command in
             guard let self else { return }
             Task { @MainActor in
@@ -91,14 +105,30 @@ class AlfredViewModel: NSObject, ObservableObject {
                 self.stopAlfredMode()
             }
         }
-        AmbientRecorder.shared.start(
-            label: "阿福模式 \(Self.sessionLabel())",
-            triggerMessage: "阿福模式開啟：整天聆聽需求與生活脈絡，只有明確喚醒句才執行。",
-            chunkInterval: 8
-        )
-        BackgroundManager.shared.scheduleAlfredModeTransparencyNotices()
-        Task { await speakText("主人，阿福模式已開啟。我會在本地判斷人聲，沒有聲音不會上傳；您叫我阿福時，我會回應您。") }
-        state = .idle
+        AmbientRecorder.shared.onStartFailed = { [weak self] message in
+            guard let self else { return }
+            Task { @MainActor in
+                self.conversationalMode = false
+                self.alfredText = message
+                self.state = .idle
+                await self.speakText(message)
+            }
+        }
+        Task {
+            if self.api.token == nil {
+                let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
+                _ = try? await self.api.deviceLogin(deviceId: deviceId)
+            }
+            AmbientRecorder.shared.start(
+                label: "阿福模式 \(Self.sessionLabel())",
+                triggerMessage: "阿福模式開啟：整天聆聽需求與生活脈絡，只有明確喚醒句才執行。",
+                chunkInterval: 5
+            )
+            BackgroundManager.shared.scheduleAlfredModeTransparencyNotices()
+            await speakText("主人，阿福模式已開啟。我會在本地判斷人聲，沒有聲音不會上傳；您叫我阿福時，我會回應您。")
+            alfredText = ""
+            state = .idle
+        }
     }
 
     private func stopAlfredMode() {
@@ -108,6 +138,7 @@ class AlfredViewModel: NSObject, ObservableObject {
         AmbientRecorder.shared.onCommandDetected = nil
         AmbientRecorder.shared.onReplyText = nil
         AmbientRecorder.shared.onStopRequested = nil
+        AmbientRecorder.shared.onStartFailed = nil
         AmbientRecorder.shared.stop()
         BackgroundManager.shared.cancelAlfredModeTransparencyNotices()
         speechGeneration += 1

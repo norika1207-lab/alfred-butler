@@ -26,6 +26,7 @@ final class AmbientRecorder: NSObject, ObservableObject {
     var onCommandDetected: ((String) -> Void)?
     var onReplyText: ((String) -> Void)?
     var onStopRequested: (() -> Void)?
+    var onStartFailed: ((String) -> Void)?
 
     private let chunkDir: URL = {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -50,10 +51,17 @@ final class AmbientRecorder: NSObject, ObservableObject {
                 self.chunksSentThisSession = 0
                 self.isRecording = true
                 self.startNewChunk()
+                guard self.isRecording, self.recorder != nil else {
+                    return
+                }
                 self.scheduleRotate()
                 NSLog("[Ambient] start session=\(sid) label=\(label)")
             } catch {
+                let message = "主人，阿福模式沒有成功開啟。請確認網路與麥克風權限後再試一次。"
                 NSLog("[Ambient] start failed: \(error.localizedDescription)")
+                self.isRecording = false
+                self.sessionId = nil
+                self.onStartFailed?(message)
             }
         }
     }
@@ -109,13 +117,20 @@ final class AmbientRecorder: NSObject, ObservableObject {
             let r = try AVAudioRecorder(url: url, settings: settings)
             r.isMeteringEnabled = true
             r.prepareToRecord()
-            r.record()
+            let ok = r.record()
+            guard ok else {
+                throw NSError(domain: "AmbientRecorder", code: -1, userInfo: [NSLocalizedDescriptionKey: "AVAudioRecorder.record() returned false"])
+            }
             self.recorder = r
             self.currentURL = url
             self.chunkHasSpeech = false
             self.startMetering()
         } catch {
+            let message = "主人，麥克風沒有成功開始錄音。請確認 Alfred 的麥克風權限。"
             NSLog("[Ambient] record start error \(error.localizedDescription)")
+            self.isRecording = false
+            self.sessionId = nil
+            self.onStartFailed?(message)
         }
     }
 
