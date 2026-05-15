@@ -68,16 +68,21 @@ def _select_primary_owner_user_id() -> Optional[str]:
     configured = os.getenv("ALFRED_PRIMARY_USER_ID") or os.getenv("ALFRED_ADMIN_USER_ID")
     if configured:
         return configured.strip()
+    primary_email = (os.getenv("ALFRED_PRIMARY_EMAIL") or "norika1207@gmail.com").strip().lower()
     try:
         c = auth_db()
-        row = c.execute(
-            """SELECT id FROM users
-               WHERE id NOT LIKE 'dev_%'
-                 AND lower(email) NOT LIKE '%test%'
-                 AND lower(email) NOT LIKE 'device%'
-                 AND lower(email) NOT LIKE '%@alfred.local'
-               ORDER BY created_at ASC LIMIT 1"""
-        ).fetchone()
+        row = None
+        if primary_email:
+            row = c.execute("SELECT id FROM users WHERE lower(email)=? LIMIT 1", (primary_email,)).fetchone()
+        if not row:
+            row = c.execute(
+                """SELECT id FROM users
+                   WHERE id NOT LIKE 'dev_%'
+                     AND lower(email) NOT LIKE '%test%'
+                     AND lower(email) NOT LIKE 'device%'
+                     AND lower(email) NOT LIKE '%@alfred.local'
+                   ORDER BY created_at ASC LIMIT 1"""
+            ).fetchone()
         if not row:
             row = c.execute(
                 "SELECT id FROM users WHERE id NOT LIKE 'dev_%' ORDER BY created_at ASC LIMIT 1"
@@ -11984,21 +11989,8 @@ async def require_admin(user_id: str = Depends(require_user)) -> str:
     configured = os.getenv("ALFRED_ADMIN_USER_ID", "").strip()
     if configured and user_id == configured:
         return user_id
-    c = auth_db()
-    row = c.execute(
-        """SELECT id FROM users
-           WHERE id NOT LIKE 'dev_%'
-             AND lower(email) NOT LIKE '%test%'
-             AND lower(email) NOT LIKE 'device%'
-             AND lower(email) NOT LIKE '%@alfred.local'
-           ORDER BY created_at ASC LIMIT 1"""
-    ).fetchone()
-    if not row:
-        row = c.execute(
-            "SELECT id FROM users WHERE id NOT LIKE 'dev_%' ORDER BY created_at ASC LIMIT 1"
-        ).fetchone()
-    c.close()
-    if row and user_id == row[0]:
+    primary_owner = _select_primary_owner_user_id()
+    if primary_owner and user_id == primary_owner:
         return user_id
     raise HTTPException(status_code=403, detail="Admin only")
 

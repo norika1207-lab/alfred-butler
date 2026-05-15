@@ -1,4 +1,4 @@
-## ⭐ 開發進度表(自動生成 — last: 2026-05-15 22:56)
+## ⭐ 開發進度表(自動生成 — last: 2026-05-15 23:15)
 
 > **這份是必讀。Alfred 整個進度都在這。**
 > 由 `scripts/generate_status.py` 掃 codebase 自動生成,**不要手動改這段(`<!-- BEGIN/END AUTO_STATUS -->` 之間)**。
@@ -8,7 +8,7 @@
 
 | 維度 | 數量 |
 |---|---:|
-| `backend/main.py` 行數 | 16,972 |
+| `backend/main.py` 行數 | 16,964 |
 | API endpoints(`@app.*`)| 147 |
 | LLM tools | 69 |
 | Fastpath 函數(zero LLM)| 17 |
@@ -18,7 +18,7 @@
 | Scrapers in tree | 11 |
 | iOS Swift 檔 | 26 個,共 5,375 行 |
 | voice_bank 預錄 mp3 | 3,061 個 |
-| `alfred.db` 大小 | 245 MB |
+| `alfred.db` 大小 | 254 MB |
 | 主人上傳分析過的檔案 | 41 |
 
 ### Fastpath 函數(zero LLM 秒答)
@@ -166,6 +166,7 @@
 **最近 20 commits**:
 
 ```
+24ecf7d Merge devices into owner identity
 f070294 Productize LINE group file search
 5da8702 Make GPS tracking functional
 e7bf37b Fix web voice mode TTS
@@ -185,7 +186,6 @@ e92be48 fix(ios audio): TTS 雜音 root cause — 三個 player 統一 AVAudioSe
 c9e8154 fix: LINE 對話邏輯 — fastpath chain + 餐飲意圖 + 區名 + history
 d258ab7 feat: POI Crack A01 — OSM Overpass 全台 35,845 餐廳 + nearby fastpath
 f444905 feat: weather fastpath — 主人問天氣不打 LLM,48s -> 2s
-5c3cc68 feat: anniversary 主動鏈 — 30/7/1/0 天前自動推送
 ```
 
 **rollback tags**(最近 10):
