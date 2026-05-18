@@ -4080,8 +4080,36 @@ def _maybe_handle_math_fastpath(message: str) -> dict | None:
         expr = expr.replace(w, "")
     expr = expr.strip().strip("？?。，,")
 
+    # 2026-05-18 修 — text 直接含答案,不只 action sub_app。
+    # 原本 LINE/Web/Telegram 用戶看到 sub_app action 後只剩「好的主人」沒答案。
+    # 安全 eval: 只允許數字 + 基本運算子 + 百分號 + 括號,禁止 import / 函式
+    _safe_expr = expr
+    # 中英文運算子轉換
+    _safe_expr = _safe_expr.replace("×", "*").replace("÷", "/").replace("^", "**")
+    # 處理百分比 (X 的 N% → X * N / 100)
+    import re as _re_calc
+    pct_match = _re_calc.match(r"^\s*(\d+(?:\.\d+)?)\s*的?\s*(\d+(?:\.\d+)?)\s*%", _safe_expr)
+    answer_text = None
+    if pct_match:
+        a = float(pct_match.group(1))
+        p = float(pct_match.group(2))
+        ans = a * p / 100
+        answer_text = f"{int(ans) if float(ans).is_integer() else round(ans, 4)}"
+    elif _re_calc.fullmatch(r"[\d\s\+\-\*\/\(\)\.%]+", _safe_expr):
+        try:
+            ans = eval(_safe_expr, {"__builtins__": {}}, {})
+            if isinstance(ans, (int, float)):
+                answer_text = f"{int(ans) if float(ans).is_integer() else round(ans, 6)}"
+        except Exception:
+            pass
+
+    if answer_text is not None:
+        spoken = f"主人，{expr} 是 {answer_text}。"
+    else:
+        spoken = f"主人，{expr} 我算給您看。"
+
     return {
-        "text": "好的，主人。",
+        "text": spoken,
         "card": None,
         "action": {
             "type": "sub_app",
@@ -4359,9 +4387,13 @@ def _maybe_handle_travel_fastpath(message, current_user=None):
     ):
         return None
 
+    # 2026-05-18 修 — 拿掉 family_or_companion from has_intent
+    # 1000 stress 抓到「太太現在在哪」誤觸 travel fallback → 列旅遊清單
+    # Root cause: 「太太/老婆/女友/男友」單詞觸發 has_intent → city None → fallback
+    # 真實場景「太太想去日本」一定有 city/country keyword 命中, family_or_companion 不需要當 sole intent trigger
+    # family_or_companion 還在用於排除餐廳誤判 (line 3798),那邊保留
     has_intent = (any(k in msg for k in _TRAVEL_INTENT_KW)
                   or has_day
-                  or family_or_companion
                   or any(k in msg for k in ["出國", "去哪玩", "想出去玩"]))
     if not has_intent:
         return None
@@ -6629,6 +6661,14 @@ async def chat(req: ChatReq,
 
 繁體中文，稱呼「主人」，說話像在說話不像在打字，不說廢話。
 **絕對不要編造任何家人、同事、朋友的人名**（不要說「小芸」「小雲」「小明」等虛構名字）。如果不知道對方名字，用「您家人」「您同事」「對方」等通用稱呼。
+
+【對話歷史邊界規則 2026-05-18】
+- 您會看到最近 5 輪對話 history (role=user/assistant)。**只用於理解當前 prompt 的上下文**。
+- **絕對不要把 history 中的人名、地名、城市、事件帶到當前 prompt 不相關的回答**。例如:
+  - history 提過「米蘭」「橫濱」「巴黎」 → 當前 prompt 問「Mochi 該打疫苗了嗎」**禁止**講「我手邊沒有米蘭的旅遊資料」這種無關話。
+  - history 提過「兒子」「太太」 → 當前 prompt 問「本月加班幾小時」**禁止**講「我這邊沒有您兒子的資料」這種無關話。
+  - history 提過「Norika 位置」 → 當前 prompt 問「我想吃美式」**禁止**講「Norika 已有一段時間未更新位置訊號」這種無關話。
+- 當前 prompt 是獨立任務時,**只回答當前 prompt**。history 是 context,不是要逐一回應的待辦清單。
 
 【旅遊規劃規則】
 - 主人要「日本旅遊行程」「大阪五天」「京都親子行程」「幫我安排旅遊」時，這是規劃需求，不是日曆需求。**先呼叫 plan_travel 生成方案。**
@@ -10053,7 +10093,7 @@ async def _auto_extract_memory(user_msg: str, assistant_reply: str, user_id=None
         try:
             _ctx_conn = _user_db()
             _ctx_rows = _ctx_conn.execute(
-                "SELECT role, content FROM conversation_log ORDER BY id DESC LIMIT 10"
+                "SELECT role, content FROM conversation_log ORDER BY id DESC LIMIT 5"
             ).fetchall()
             _ctx_conn.close()
             for _r, _c in reversed(_ctx_rows):
@@ -12147,7 +12187,7 @@ async def _run_alfred_for_messaging(text: str) -> str:
         _hist_rows = _hist_c.execute(
             "SELECT role, content FROM conversation_log "
             "WHERE role IN ('user','assistant') "
-            "ORDER BY id DESC LIMIT 10"
+            "ORDER BY id DESC LIMIT 5"
         ).fetchall()
         _hist_c.close()
         history = [{"role": r[0], "content": r[1]} for r in reversed(_hist_rows)]
