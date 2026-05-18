@@ -1,4 +1,4 @@
-## ⭐ 開發進度表(自動生成 — last: 2026-05-16 00:25)
+## ⭐ 開發進度表(自動生成 — last: 2026-05-18 13:07)
 
 > **這份是必讀。Alfred 整個進度都在這。**
 > 由 `scripts/generate_status.py` 掃 codebase 自動生成,**不要手動改這段(`<!-- BEGIN/END AUTO_STATUS -->` 之間)**。
@@ -8,17 +8,17 @@
 
 | 維度 | 數量 |
 |---|---:|
-| `backend/main.py` 行數 | 16,964 |
+| `backend/main.py` 行數 | 17,783 |
 | API endpoints(`@app.*`)| 147 |
 | LLM tools | 69 |
-| Fastpath 函數(zero LLM)| 17 |
-| DB tables(`CREATE TABLE`)| 72 |
+| Fastpath 函數(zero LLM)| 18 |
+| DB tables(`CREATE TABLE`)| 73 |
 | Backend service modules | 9 |
 | Populate seed scripts | 6 |
 | Scrapers in tree | 11 |
-| iOS Swift 檔 | 26 個,共 5,447 行 |
+| iOS Swift 檔 | 26 個,共 5,456 行 |
 | voice_bank 預錄 mp3 | 3,061 個 |
-| `alfred.db` 大小 | 309 MB |
+| `alfred.db` 大小 | 439 MB |
 | 主人上傳分析過的檔案 | 41 |
 
 ### Fastpath 函數(zero LLM 秒答)
@@ -26,6 +26,7 @@
 | 函數 | 用途 |
 |---|---|
 | `_maybe_handle_liveness_fastpath` | ⭐ 你還在嗎 / 你好 / 早安(2026-05-13 加,從 24s → 0.7s) |
+| `_maybe_handle_chaos_guard_fastpath` | — |
 | `_maybe_handle_ambient_command_fastpath` | 聆聽錄音指令 |
 | `_maybe_handle_iphone_photo_fastpath` | iPhone 相簿請求 |
 | `_maybe_handle_meeting_record_fastpath` | 會議記錄查詢 |
@@ -85,9 +86,9 @@
 | `Alfred/AlfredApp.swift` | 62 | App 入口 + consent gate |
 | `Alfred/Core/AfuBrainGate.swift` | 213 | MASL gate,destructive action 本地擋 |
 | `Alfred/Core/AlfredAPI.swift` | 573 | 後端 API client(含 SSE stream) |
-| `Alfred/Core/AlfredViewModel.swift` | 880 | 主 ViewModel,狀態機,action dispatch |
+| `Alfred/Core/AlfredViewModel.swift` | 886 | 主 ViewModel,狀態機,action dispatch |
 | `Alfred/Core/AliceFastpath.swift` | 288 | 時間/日期/數學/單位/早安謝謝 zero-LLM(待補 liveness) |
-| `Alfred/Core/AmbientRecorder.swift` | 237 | 被動環境錄音,120s chunk |
+| `Alfred/Core/AmbientRecorder.swift` | 240 | 被動環境錄音,120s chunk |
 | `Alfred/Core/AudioEngine.swift` | 178 | AVAudioRecorder + AVAudioPlayer |
 | `Alfred/Core/AuthManager.swift` | 177 | JWT + Keychain(原 legacy 名,實際多處使用) |
 | `Alfred/Core/BackgroundManager.swift` | 193 | reminder / family alert / visit prep 輪詢 |
@@ -157,7 +158,7 @@
 
 | 類別 | 數量 / 內容 |
 |---|---|
-| `*.bak*` 檔案 | 131 個 |
+| `*.bak*` 檔案 | 143 個 |
 | 備份資料夾 | ResourceBackups |
 | 舊快照 | ios_latest.zip, ios_app, ios |
 
@@ -166,6 +167,7 @@
 **最近 20 commits**:
 
 ```
+4e796c5 Wire iOS voice bank playback
 9837e1a Use Norika primary owner identity
 24ecf7d Merge devices into owner identity
 f070294 Productize LINE group file search
@@ -185,7 +187,6 @@ cd2556f fix(anniversary_fastpath): 連 shared alfred.db 不要走 per-user db (a
 e92be48 fix(ios audio): TTS 雜音 root cause — 三個 player 統一 AVAudioSession 設定
 1ec91ef feat(identity): owner_identity singleton + LINE/TG gate (Bug 修法 a)
 c9e8154 fix: LINE 對話邏輯 — fastpath chain + 餐飲意圖 + 區名 + history
-d258ab7 feat: POI Crack A01 — OSM Overpass 全台 35,845 餐廳 + nearby fastpath
 ```
 
 **rollback tags**(最近 10):

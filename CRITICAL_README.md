@@ -14,6 +14,18 @@
 
 所有 iOS 程式改動必須在 `~/Dropbox/Alfred/Alfred/` 進行。
 
+### 錯誤專案處理規則
+
+如果你看到的專案不是 `~/Dropbox/Alfred/Alfred/`，一律視為錯誤來源。
+
+- 不要 build 舊 clone。
+- 不要把舊 clone 安裝到手機。
+- 不要拿舊 clone 的 UI、icon、按鈕位置判斷阿福目前狀態。
+- 不要從舊 clone commit。
+- 如果已經誤裝，先用正確專案重新 build/install/launch，再測。
+
+正確阿福主畫面應該是黑金零介面、帽子識別、中央語音入口、正上方金色狀態點。不是這個樣子，先查 project path 和 bundle id。
+
 ---
 
 ## 架構總覽
@@ -41,11 +53,11 @@ Alfred/Features/Photos/
 
 ### 後端
 
-- **URL**: `https://YOUR_BACKEND_HOST`
+- **URL**: `https://alfred.31.97.221.240.nip.io`
 - **Port**: `9001`
-- **SSH alias**: `YOUR_SERVER`（即 `ssh YOUR_SERVER`）
+- **SSH alias**: `sportverse`（即 `ssh sportverse`）
 - **後端 code**: `/opt/alfred/backend/main.py`
-- **Restart**: `ssh YOUR_SERVER 'systemctl restart alfred'`
+- **Restart**: `ssh sportverse 'systemctl restart alfred'`
 
 ---
 
@@ -124,22 +136,9 @@ func tts(text: String) async throws -> Data {
 | 8001 | 賽馬/turfenix backend | 與阿福無關 |
 | 9001 | 阿福 backend | `systemctl restart alfred` |
 
-所有 service 都跑在 `YOUR_SERVER` user 下。Kill 任何 process 前先確認是什麼。
-
+所有 service 都跑在 `sportverse` user 下。Kill 任何 process 前先確認是什麼。
 
 ---
-
-## App Store / 阿福模式審查策略
-
-阿福模式不可描述成「全天候監聽」。上架版定位是：**使用者主動開啟的私人語音日誌與生活記憶整理工具**。
-
-強制規則：
-- 不自動開麥；每次開啟都必須主人進 App 按下並看見宣告。
-- 開啟中必須有明確狀態，並每 2 小時發本機透明提醒。
-- 沒有聲音的片段本地丟棄，不上傳、不轉逐字稿。
-- 主人可按鈕關閉，也可說「阿福你先關閉 / 阿福你先不要聽 / 阿福你去休息」。
-- 找文件、寄 Email、傳訊息、改行事曆等對外或敏感動作，必須由主人要求或確認。
-- App Store 文案用 personal voice journal / life log / private transcript / meeting notes；不要用 always listening / background monitoring / 整天監聽。
 
 ## 已實作功能清單
 
@@ -160,7 +159,7 @@ func tts(text: String) async throws -> Data {
 
 1. **所有改動在 git worktree（沙盒）進行**，測試通過才 merge 回 main
 2. **iOS 改動**：在 `~/Dropbox/Alfred/Alfred/` 編輯，用 Xcode 26.4 build
-3. **後端改動**：編輯 `/opt/alfred/backend/main.py`，然後 `ssh YOUR_SERVER 'systemctl restart alfred'`
+3. **後端改動**：編輯 `/opt/alfred/backend/main.py`，然後 `ssh sportverse 'systemctl restart alfred'`
 4. **Commit 前**：確認 `git diff HEAD` 符合預期，不要 commit README.md 以外的雜檔
 5. **Merge 前**：在實機上測試語音對話、TTS 聲音從 speaker 出、相片分析
 
