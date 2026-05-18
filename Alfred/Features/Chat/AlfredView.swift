@@ -116,7 +116,7 @@ struct AlfredView: View {
         // 金色被動錄音鈕（介面正上方，按下沉並閃金光；不觸發 AI 回應）
         .overlay(alignment: .top) {
             AmbientButton()
-                .padding(.top, 8)
+                .padding(.top, 52)
         }
         .onAppear { vm.onAppear() }
     }

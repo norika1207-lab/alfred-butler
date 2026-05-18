@@ -1,3 +1,16 @@
+<!-- ALFRED_MANDATORY_SESSION_BOOTSTRAP -->
+# MANDATORY FIRST STEP FOR ANY ALFRED / AFU / ALICE REQUEST
+
+Before any analysis, file edit, DB write, backend patch, demo edit, iOS change, systemd change, or conclusion about Alfred / Afu / Alice / File Map, run:
+
+```bash
+/usr/local/bin/alfred-context-guard
+```
+
+This is required even in a new session. Do not patch first and read docs later. See `/opt/alfred/ALFRED_MANDATORY_SESSION_BOOTSTRAP.md`.
+
+<!-- /ALFRED_MANDATORY_SESSION_BOOTSTRAP -->
+
 # Pit — The Training Ground Where Agents Become Real
 
 > 這份文件是寫給 VC、寫給 Agent 開發者、寫給未來接手的人。

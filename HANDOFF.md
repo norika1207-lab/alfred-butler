@@ -1,3 +1,16 @@
+<!-- ALFRED_MANDATORY_SESSION_BOOTSTRAP -->
+# MANDATORY FIRST STEP FOR ANY ALFRED / AFU / ALICE REQUEST
+
+Before any analysis, file edit, DB write, backend patch, demo edit, iOS change, systemd change, or conclusion about Alfred / Afu / Alice / File Map, run:
+
+```bash
+/usr/local/bin/alfred-context-guard
+```
+
+This is required even in a new session. Do not patch first and read docs later. See `/opt/alfred/ALFRED_MANDATORY_SESSION_BOOTSTRAP.md`.
+
+<!-- /ALFRED_MANDATORY_SESSION_BOOTSTRAP -->
+
 # Alfred iOS App — 後端 API 交接文件
 
 > 給本地 Claude Code session 讀的。VPS 後端已完成，iOS App 只需接 API。
@@ -187,3 +200,17 @@ Response: { "suggestions": [{ "id", "trigger", "desc" }], "tried_count": int }
 ## Git Repo
 VPS: `/opt/alfred/`
 Web PWA 參考實作: `/opt/alfred/frontend/index.html`（1200 行，有所有 API 呼叫的 JS 範例）
+
+
+## Mandatory Context Guard Update (2026-05-15T21:57:38)
+
+Alfred now has the same VPS-level mandatory context mechanism as Lobster.
+
+- Entry guard: `/usr/local/bin/alfred-context-guard`
+- Session bootstrap: `/opt/alfred/ALFRED_MANDATORY_SESSION_BOOTSTRAP.md`
+- Unified shell hook: `/etc/profile.d/00-mandatory-context-guards.sh`
+- Root shell startup files source it from `/root/.bashrc` and `/root/.profile`
+- Trigger words include `Alfred`, `Afu`, `Alice`, `file map`, `summary backfill`, `smart-search`, `Qwen`, `Telegram`, and `LINE`.
+- Before editing or diagnosing Alfred, the guard must load all Alfred `.md` files, the DB map, File Map / Summary Runtime references, and service status.
+- File Map exists in the live DB layer: main `/opt/alfred/data/alfred.db` currently has `vault_files`, `vault_file_keywords`, `vault_file_summaries`, `vault_file_materializations`, `drive_index`, and `mac_files_index` tables. Current observation: materialization rows are still `0`, so materialization execution needs separate validation before claiming it is fully active.
+

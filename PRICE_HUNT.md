@@ -1,3 +1,16 @@
+<!-- ALFRED_MANDATORY_SESSION_BOOTSTRAP -->
+# MANDATORY FIRST STEP FOR ANY ALFRED / AFU / ALICE REQUEST
+
+Before any analysis, file edit, DB write, backend patch, demo edit, iOS change, systemd change, or conclusion about Alfred / Afu / Alice / File Map, run:
+
+```bash
+/usr/local/bin/alfred-context-guard
+```
+
+This is required even in a new session. Do not patch first and read docs later. See `/opt/alfred/ALFRED_MANDATORY_SESSION_BOOTSTRAP.md`.
+
+<!-- /ALFRED_MANDATORY_SESSION_BOOTSTRAP -->
+
 # Alfred Price Hunt
 ### 你說一句話，Alfred 同時幫你問遍台灣 13 個電商，1.5 秒告訴你哪裡最便宜
 

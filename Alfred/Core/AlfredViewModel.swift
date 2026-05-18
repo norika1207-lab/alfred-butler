@@ -119,13 +119,18 @@ class AlfredViewModel: NSObject, ObservableObject {
                 let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
                 _ = try? await self.api.deviceLogin(deviceId: deviceId)
             }
+
+            // 先說明、再開麥。避免剛進阿福模式時 TTS/VoiceBank 與錄音同時搶 AVAudioSession，
+            // 造成系統麥克風黃點閃爍、錄音被中斷，或看起來像沒有反應。
+            await speakText("主人，阿福模式已開啟。我會在本地判斷人聲，沒有聲音不會上傳；您叫我阿福時，我會回應您。")
+
+            guard self.conversationalMode else { return }
             AmbientRecorder.shared.start(
                 label: "阿福模式 \(Self.sessionLabel())",
-                triggerMessage: "阿福模式開啟：整天聆聽需求與生活脈絡，只有明確喚醒句才執行。",
-                chunkInterval: 5
+                triggerMessage: "阿福模式開啟：使用者確認後啟用，只處理有聲片段與明確喚醒句。",
+                chunkInterval: 60
             )
             BackgroundManager.shared.scheduleAlfredModeTransparencyNotices()
-            await speakText("主人，阿福模式已開啟。我會在本地判斷人聲，沒有聲音不會上傳；您叫我阿福時，我會回應您。")
             alfredText = ""
             state = .idle
         }
@@ -153,6 +158,7 @@ class AlfredViewModel: NSObject, ObservableObject {
     }
 
     var statusLine: String? {
+        if conversationalMode { return "LISTENING" }
         switch state {
         case .listening:
             return "LISTENING"

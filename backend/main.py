@@ -146,7 +146,12 @@ def user_db_path(user_id: str) -> str:
 
 def user_db(user_id: str):
     """每個主人身份一顆 SQLite；裝置 id 會先 resolve 到 canonical owner。"""
-    return sqlite3.connect(user_db_path(user_id))
+    conn = sqlite3.connect(user_db_path(user_id), timeout=1.0)
+    try:
+        conn.execute("PRAGMA busy_timeout=1000")
+    except Exception:
+        pass
+    return conn
 
 def _ensure_mac_tables(conn):
     """建立 per-user mac 索引表（若不存在）。"""
@@ -165,14 +170,22 @@ def _query_mac_index(user_id, sql, params=()):
     results = []
     if user_id:
         try:
-            uc = _sq_qmi.connect(user_db_path(user_id))
+            uc = _sq_qmi.connect(user_db_path(user_id), timeout=0.35)
+            try:
+                uc.execute("PRAGMA busy_timeout=350")
+            except Exception:
+                pass
             results = uc.execute(sql, params).fetchall()
             uc.close()
         except Exception:
             pass
     if not results:
         try:
-            sc = _sq_qmi.connect(DB)
+            sc = _sq_qmi.connect(DB, timeout=0.35)
+            try:
+                sc.execute("PRAGMA busy_timeout=350")
+            except Exception:
+                pass
             results = sc.execute(sql, params).fetchall()
             sc.close()
         except Exception:
@@ -186,14 +199,22 @@ def _query_user_then_shared(user_id, sql, params=()):
     results = []
     if user_id:
         try:
-            uc = _sq_quts.connect(user_db_path(user_id))
+            uc = _sq_quts.connect(user_db_path(user_id), timeout=0.35)
+            try:
+                uc.execute("PRAGMA busy_timeout=350")
+            except Exception:
+                pass
             results = uc.execute(sql, params).fetchall()
             uc.close()
         except Exception:
             pass
     if not results:
         try:
-            sc = _sq_quts.connect(DB)
+            sc = _sq_quts.connect(DB, timeout=0.35)
+            try:
+                sc.execute("PRAGMA busy_timeout=350")
+            except Exception:
+                pass
             results = sc.execute(sql, params).fetchall()
             sc.close()
         except Exception:
@@ -537,9 +558,74 @@ client = _oai_client  # 用於 vision 等直接呼叫
 # 目前 request 的 user_id（由 middleware 設定）
 _current_user_id: Optional[str] = None
 
+class _SharedPendingFileList:
+    """SQLite-backed pending file state shared across uvicorn workers."""
+    def __init__(self, path: str):
+        self.path = path
+        self._ready = False
+
+    def _conn(self):
+        conn = sqlite3.connect(self.path, timeout=0.35)
+        try:
+            conn.execute("PRAGMA busy_timeout=350")
+        except Exception:
+            pass
+        if not self._ready:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS pending_file_state ("
+                "uid TEXT PRIMARY KEY, payload TEXT NOT NULL, ts REAL NOT NULL)"
+            )
+            conn.commit()
+            self._ready = True
+        return conn
+
+    def get(self, uid, default=None):
+        try:
+            conn = self._conn()
+            row = conn.execute("SELECT payload FROM pending_file_state WHERE uid=?", (str(uid),)).fetchone()
+            conn.close()
+            if not row:
+                return default
+            return json.loads(row[0])
+        except Exception:
+            return default
+
+    def __getitem__(self, uid):
+        val = self.get(uid, None)
+        if val is None:
+            raise KeyError(uid)
+        return val
+
+    def __setitem__(self, uid, value):
+        try:
+            payload = json.dumps(value or {}, ensure_ascii=False)
+            ts = float((value or {}).get("ts") or __import__('time').time())
+            conn = self._conn()
+            conn.execute(
+                "INSERT OR REPLACE INTO pending_file_state(uid,payload,ts) VALUES(?,?,?)",
+                (str(uid), payload, ts),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+    def pop(self, uid, default=None):
+        old = self.get(uid, default)
+        try:
+            conn = self._conn()
+            conn.execute("DELETE FROM pending_file_state WHERE uid=?", (str(uid),))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        return old
+
+
 # 暫存最近一次檔案搜尋清單（供下一輪「選第N份」fastpath 使用）
 # uid → {"candidates": list[dict], "ts": float}
-_pending_file_list: dict = {}
+# 必須跨 worker 共享，否則「列前五份 → 不是 → 好，下一批」會隨機斷掉。
+_pending_file_list = _SharedPendingFileList(DB)
 
 def db(user_id: Optional[str] = None):
     """
@@ -549,12 +635,21 @@ def db(user_id: Optional[str] = None):
     uid = user_id or _current_user_id
     if uid:
         path = user_db_path(uid)
-        conn = sqlite3.connect(path)
+        conn = sqlite3.connect(path, timeout=1.0)
+        try:
+            conn.execute("PRAGMA busy_timeout=1000")
+        except Exception:
+            pass
         # 首次建立時初始化 schema
         if not _user_db_initialized(path):
             _init_user_db(conn)
         return conn
-    return sqlite3.connect(DB)
+    conn = sqlite3.connect(DB, timeout=1.0)
+    try:
+        conn.execute("PRAGMA busy_timeout=1000")
+    except Exception:
+        pass
+    return conn
 
 _initialized_dbs: set = set()
 
@@ -1309,18 +1404,29 @@ def _save_conv_turn(role: str, content: str):
     # 只過濾極短的純系統錯誤訊息，不過濾「找不到」等有意義的 context
     if role == "assistant" and len(text) < 30 and any(n in text for n in _CONV_NOISE):
         return
-    c = db()
-    # 加時間戳前綴，讓 LLM 知道對話時序（先去除 LLM 回應自帶的重複前綴）
-    import re as _re_ts
-    clean_text = _re_ts.sub(r'^\[\d{1,2}:\d{2}\]\s*', '', text)
-    ts_prefix = datetime.now().strftime("[%H:%M] ")
-    c.execute("INSERT INTO conversation_log (role, content, ts) VALUES (?, ?, ?)",
-              (role, ts_prefix + clean_text[:3900], datetime.now().isoformat()))
-    # 保留最新 100 筆（50 輪對話，60 分鐘內不會爆）
-    c.execute("DELETE FROM conversation_log WHERE id NOT IN "
-              "(SELECT id FROM conversation_log ORDER BY id DESC LIMIT 100)")
-    c.commit()
-    c.close()
+    c = None
+    try:
+        c = db()
+        # 加時間戳前綴，讓 LLM 知道對話時序（先去除 LLM 回應自帶的重複前綴）
+        import re as _re_ts
+        clean_text = _re_ts.sub(r'^\[\d{1,2}:\d{2}\]\s*', '', text)
+        ts_prefix = datetime.now().strftime("[%H:%M] ")
+        c.execute("INSERT INTO conversation_log (role, content, ts) VALUES (?, ?, ?)",
+                  (role, ts_prefix + clean_text[:3900], datetime.now().isoformat()))
+        # 保留最新 100 筆（50 輪對話，60 分鐘內不會爆）
+        c.execute("DELETE FROM conversation_log WHERE id NOT IN "
+                  "(SELECT id FROM conversation_log ORDER BY id DESC LIMIT 100)")
+        c.commit()
+    except sqlite3.OperationalError as exc:
+        if "locked" not in str(exc).lower():
+            raise
+        print(f"[conversation_log] skip locked write: {exc}")
+    finally:
+        try:
+            if c:
+                c.close()
+        except Exception:
+            pass
 
 def _load_conv_history(limit: int = 30) -> list:
     """Return recent conversation turns (oldest first) for LLM context.
@@ -2293,20 +2399,20 @@ def _butler_semantic_gate(message: str, current_user=None) -> dict:
     travel_words = [
         "旅遊", "旅行", "行程", "出國", "去玩", "自由行", "親子遊", "蜜月",
         "日本", "韓國", "泰國", "東京", "大阪", "京都", "沖繩", "首爾",
-        "曼谷", "巴黎", "倫敦", "紐約", "幫我安排旅遊", "排行程",
+        "曼谷", "巴黎", "倫敦", "紐約", "幫我安排旅遊", "排行程", "放空", "去哪裡",
     ]
     food_words = [
         "餐廳", "美食", "早餐", "午餐", "晚餐", "宵夜", "想吃", "想要吃",
         "火鍋", "麻辣", "漢堡", "拉麵", "壽司", "米其林", "附近吃",
     ]
     file_words = [
-        "檔案", "文件", "合約", "報告", "PDF", "pdf", "簡報", "提案",
-        "Google Drive", "Drive", "雲端硬碟", "Mac", "本機", "找那份",
+        "檔案", "文件", "合約", "和約", "報告", "PDF", "pdf", "簡報", "提案", "報價單",
+        "開會紀錄", "會議紀錄", "會議記錄", "Google Drive", "Drive", "雲端硬碟", "Mac", "本機", "找那份",
     ]
     news_words = ["新聞", "TechCrunch", "techcrunch", "科技網站", "國外網站", "時事", "讀報"]
     ambient_words = ["阿福模式", "聆聽模式", "聆聽", "逐字稿", "錄音", "麥克風"]
     photo_words = ["照片", "相片", "相簿", "自拍", "截圖", "photo"]
-    calendar_words = ["行事曆", "會議", "開會", "排會", "日曆"]
+    calendar_words = ["行事曆", "會議", "開會", "排會", "日曆", "有會嗎", "明天有會", "今天有會"]
     math_words = ["加", "減", "乘", "除", "等於", "多少", "+", "-", "*", "/", "×", "÷"]
 
     pure_file_select = bool(
@@ -2416,7 +2522,162 @@ def _butler_semantic_gate(message: str, current_user=None) -> dict:
     }
 
 
+
+AFU_BRAIN_POLICY_VERSION = "2026.05.07"
+
+
+def _afu_brain_decide(message: str, semantic: dict | None = None) -> dict:
+    """Deterministic Afu Brain/MASL gate for every backend channel."""
+    import re as _re_ab
+    raw = (message or "").strip()
+    low = raw.lower()
+    semantic = semantic or {}
+
+    def has(words):
+        return any(w in raw or w.lower() in low for w in words)
+
+    irreversible = {
+        "payment": {
+            "words": ["付款", "支付", "付錢", "付出去", "轉帳", "匯款", "刷卡", "pay", "payment", "transfer", "wire"],
+            "blocked": "move_money",
+            "risk": "critical",
+        },
+        "delete": {
+            "words": ["刪除", "刪掉", "永久移除", "覆寫", "delete", "overwrite", "remove forever", "drop table"],
+            "blocked": "delete_or_overwrite",
+            "risk": "critical",
+        },
+        "trade": {
+            "words": ["下單", "買進", "賣出", "交易", "buy stock", "sell stock", "submit order", "trade"],
+            "blocked": "trade_order",
+            "risk": "critical",
+        },
+    }
+    for intent, spec in irreversible.items():
+        if has(spec["words"]):
+            return {
+                "intent": intent,
+                "risk": spec["risk"],
+                "decision": "block",
+                "can_execute": False,
+                "allowed_preparation": intent != "delete",
+                "required_confirmation": True,
+                "blocked_final_action": spec["blocked"],
+                "skills": ["approval.required"],
+                "reason": "Afu Brain blocks irreversible final actions from raw language.",
+                "source_policy_version": AFU_BRAIN_POLICY_VERSION,
+            }
+
+    external_actions = {
+        "email": (["寄信", "回信", "寄出", "send email", "reply email", "寄給"], "send_email", "medium"),
+        "publish": (["發布", "公開", "上架", "publish", "post to", "上傳到"], "external_publish", "high"),
+        "submit": (["提交", "送出申請", "submit"], "external_submit", "high"),
+        "merge": (["合併分支", "merge pr", "merge"], "merge_branch", "high"),
+        "share_file": (["分享檔案", "傳檔案", "傳給", "丟到群組", "send file", "share file"], "external_file_action", "high"),
+    }
+    for intent, (words, blocked, risk) in external_actions.items():
+        if has(words):
+            return {
+                "intent": intent,
+                "risk": risk,
+                "decision": "ask",
+                "can_execute": False,
+                "allowed_preparation": True,
+                "required_confirmation": True,
+                "blocked_final_action": blocked,
+                "skills": ["draft.prepare", "approval.before_external_action"],
+                "reason": "External final actions require owner confirmation.",
+                "source_policy_version": AFU_BRAIN_POLICY_VERSION,
+            }
+
+    contract_domain = has(["合約", "契約", "協議書", "nda", "contract", "legal"])
+    review_only = has(["分析", "審查", "摘要", "重點", "風險", "條款", "review", "red flag"])
+    external_contract = has(["寄出", "送出", "簽署", "接受", "轉寄", "send", "sign", "approve"])
+    explicit_file_search = has(["找", "查", "搜尋", "搜索", "打開", "開啟"])
+    if contract_domain and review_only and not explicit_file_search:
+        return {
+            "intent": "contract",
+            "risk": "high",
+            "decision": "ask" if external_contract else "prepare",
+            "can_execute": not external_contract and review_only,
+            "allowed_preparation": True,
+            "required_confirmation": external_contract,
+            "blocked_final_action": "external_send" if external_contract else None,
+            "skills": ["files.read", "contract.red_flags", "approval.before_send"],
+            "reason": "Contract work may analyze, but external send/sign/accept needs approval.",
+            "source_policy_version": AFU_BRAIN_POLICY_VERSION,
+        }
+
+    file_domain = semantic.get("domain") == "file" or has([
+        "找檔案", "查檔案", "找文件", "找合約", "找報價", "找簡報", "檔案", "文件", "合約", "pdf", "docx", "xlsx", "drive"
+    ])
+    concrete_code_lookup = bool(_re_ab.search(r"(找|查|搜尋|搜索).{0,20}[A-Za-z][A-Za-z0-9_-]{2,}", raw))
+    if file_domain or concrete_code_lookup:
+        return {
+            "intent": "file_search",
+            "risk": "medium",
+            "decision": "prepare",
+            "can_execute": True,
+            "allowed_preparation": True,
+            "required_confirmation": False,
+            "blocked_final_action": "external_file_action",
+            "skills": ["vault.search", "vault.rank", "vault.audit"],
+            "reason": "File search may prepare ranked candidates. Opening/sending/sharing/deleting remains approval-gated.",
+            "source_policy_version": AFU_BRAIN_POLICY_VERSION,
+        }
+
+    if contract_domain:
+        return {
+            "intent": "contract",
+            "risk": "high",
+            "decision": "ask" if external_contract else "prepare",
+            "can_execute": not external_contract and review_only,
+            "allowed_preparation": True,
+            "required_confirmation": external_contract,
+            "blocked_final_action": "external_send" if external_contract else None,
+            "skills": ["files.read", "contract.red_flags", "approval.before_send"],
+            "reason": "Contract work may analyze, but external send/sign/accept needs approval.",
+            "source_policy_version": AFU_BRAIN_POLICY_VERSION,
+        }
+
+    return {
+        "intent": semantic.get("intent") or "chat",
+        "risk": "none",
+        "decision": "allow",
+        "can_execute": True,
+        "allowed_preparation": True,
+        "required_confirmation": False,
+        "blocked_final_action": None,
+        "skills": [],
+        "reason": "Low-risk reversible chat or local information route.",
+        "source_policy_version": AFU_BRAIN_POLICY_VERSION,
+    }
+
+
+def _afu_brain_gate_response(decision: dict) -> dict | None:
+    decision_type = decision.get("decision")
+    blocked = decision.get("blocked_final_action") or "外部動作"
+    intent = decision.get("intent") or "unknown"
+    if decision_type == "block":
+        text = f"主人，這個動作屬於「{blocked}」，阿福不能直接執行。我可以先替您準備資料，但最後動作必須由您明確確認。"
+        return {"text": text, "card": None, "action": {"type": "afu_brain_block", "intent": intent, "blocked": blocked}}
+    if decision_type == "ask" and decision.get("required_confirmation"):
+        text = f"主人，這一步會碰到「{blocked}」。阿福可以先準備草稿或清單，但不會直接執行。您要我先準備嗎？"
+        return {"text": text, "card": None, "action": {"type": "afu_brain_ask", "intent": intent, "blocked": blocked}}
+    return None
+
 def _semantic_clears_file_pending(message: str, current_user=None) -> bool:
+    msg = (message or "").replace(" ", "")
+    non_file_terms = [
+        "肚子餓", "吃飯", "餐廳", "咖啡", "宵夜", "晚餐", "午餐", "早餐", "附近吃",
+        "gps", "GPS", "定位", "我在哪", "附近有什麼", "迷路",
+        "幫我排", "行程", "日曆", "會議", "取消那個會", "下午三點",
+        "急救", "跌倒", "頭暈", "血氧", "心跳", "吃藥", "不舒服",
+        "管家", "不是秘書", "跳針", "正常嗎", "聽得到嗎", "用文字", "不要出聲", "放空",
+        "付款", "轉帳", "匯款", "買股票", "下單", "刪除帳號", "把資料刪掉",
+    ]
+    if any(k in msg for k in non_file_terms):
+        return True
     sem = _butler_semantic_gate(message, current_user)
     return sem.get("context_policy") == "clear_file_pending"
 
@@ -2433,6 +2694,7 @@ def _summary_intent(message: str) -> bool:
 def _file_search_tokens(message: str) -> list[str]:
     import re as _re
     msg = message or ""
+    msg_compact = _re.sub(r"\s+", "", msg)
     segments = _re.split(r"[，。？！、；：\s\.,\?!;:\n]+", msg)
     stop = {
         "阿福", "幫我", "找一下", "找", "搜尋", "查一下", "查", "檔案", "文件",
@@ -2481,11 +2743,12 @@ def _file_search_tokens(message: str) -> list[str]:
         if len(out) >= 10:
             break
 
-    for kw in ["合約", "顧問", "報價", "提案", "簡報", "報告", "企劃書", "財產目錄",
+    for kw in ["合約", "和約", "顧問", "報價", "爆價", "提案", "簡報", "報告", "企劃書", "財產目錄",
                "固定資產", "費用明細", "明細", "發票", "收據", "清單",
                "會計", "人力資源", "開發二處", "損益", "薪資", "薪酬", "業績"]:
-        if kw in msg and kw not in out:
-            out.append(kw)
+        normalized_kw = {"和約": "合約", "爆價": "報價"}.get(kw, kw)
+        if (kw in msg or kw in msg_compact) and normalized_kw not in out:
+            out.append(normalized_kw)
     return out[:10]
 def _loose_subsequence(needle: str, hay: str) -> bool:
     """True if the meaningful characters of needle appear in hay in order; allows inserted dates/numbers."""
@@ -2581,6 +2844,9 @@ def _maybe_handle_liveness_fastpath(message: str):
     m_clean = m
     for p in "。.,、!?,?!. ":
         m_clean = m_clean.replace(p, "")
+    if any(k in m_clean for k in ["你是秘書嗎", "你是不是秘書", "你是助理嗎", "你是什麼", "阿福是什麼"]):
+        return {"text": "主人，我是管家，不是秘書。秘書、文件、會議和搜尋都只是我能調度的助手。", "card": None,
+                "action": {"type": "identity_butler"}}
     if m_clean in _LIVENESS_PATTERNS or (
         any(k in m_clean for k in ["你還在嗎", "還在嗎", "你在嗎", "在不在"]) and
         any(k in m_clean for k in ["不要去找文件", "不要找文件", "不要找檔案", "不用找文件"])
@@ -2601,6 +2867,198 @@ def _maybe_handle_liveness_fastpath(message: str):
                 "action": {"type": "play_voice_bank", "category": "greet_time"}}
     return None
 
+
+
+def _maybe_handle_chaos_guard_fastpath(message: str, current_user=None):
+    """Product chaos guard: answer messy owner utterances before any LLM/tool fanout."""
+    import re as _re
+    raw = (message or "").strip()
+    uid = current_user or "__anon__"
+
+    def _compact(x: str) -> str:
+        return _re.sub(r"[\s，。！？!?、；;：:\.\-_/\\\(\)\[\]{}'\"`~]+", "", (x or "").strip())
+
+    compact = _compact(raw)
+    lower = compact.lower()
+
+    def clear_pending():
+        try:
+            _pending_file_list.pop(uid, None)
+        except Exception:
+            pass
+
+    def out(text, action=None, *, clear=False):
+        if clear:
+            clear_pending()
+        return {"text": text, "card": None, "action": action}
+
+    if not raw:
+        return out("主人，我在。您可以直接說要找什麼、去哪裡、或要我看哪件事。", {"type": "play_voice_bank", "category": "ack_butler"}, clear=True)
+
+    # Human-chaos normalizer: remove the filler people naturally add around the real request.
+    stripped = lower
+    for token in ["阿福", "alfred", "afu", "拜託", "拜托", "快點", "快", "不要廢話", "先", "一下", "一下下", "啦", "喔", "哦", "蛤", "哈", "欸", "誒", "喂", "在嗎", "在不在", "在", "算了"]:
+        stripped = stripped.replace(token.lower(), "")
+    stripped = _compact(stripped)
+
+    noise_set = {"", "...", "…", "。", "？", "?", "??", "？？", "測試", "測試測試", "測試測試測試", "喂", "喂?", "在", "在？", "在?", "謝謝", "謝啦", "3q", "ok", "okay", "嗯", "恩", "呃", "啊", "隨便"}
+    file_markers = ["找", "合約", "和約", "報價", "爆價", "檔案", "文件", "pdf", "PDF", "doc", "docx", "xlsx", "會議紀錄", "開會紀錄"]
+    nonfile_markers = ["肚子餓", "吃", "餐廳", "咖啡", "gps", "GPS", "定位", "位置", "我在哪", "迷路", "行程", "日曆", "會", "急救", "頭暈", "血氧", "心跳", "付款", "轉帳"]
+    if _re.fullmatch(r"[a-zA-Z]{6,}", compact) or _re.fullmatch(r"[a-zA-Z]{6,}", stripped) or _re.fullmatch(r"[\W_]+", compact) or _re.fullmatch(r"[\W_]+", stripped):
+        return out("主人，我在。這句我看不出可執行的事，請直接說要找檔案、看行程、查位置、吃飯或健康照顧。", {"type": "play_voice_bank", "category": "ack_butler"}, clear=True)
+    if "下一行亂講" in compact or "下一行亂講" in stripped:
+        return out("主人，我在。這句像測試雜訊，我先不拿去搜尋檔案。請直接說要我做什麼。", {"type": "play_voice_bank", "category": "ack_butler"}, clear=True)
+    if len(raw) > 420 and not any(k in compact for k in file_markers + nonfile_markers):
+        return out("主人，這段太長而且沒有明確任務。我先不拿去搜尋或推理，請您用一句話說要我做什麼。", {"type": "need_clarification"}, clear=True)
+    if compact == "好" or stripped == "好":
+        entry = _pending_file_list.get(uid) or {}
+        # 「好」只有在阿福剛問「要不要繼續列下一批」時才算檔案續頁。
+        # 其他單字回應不能被舊檔案清單污染，更不能掉進 LLM 翻舊任務。
+        if entry.get("awaiting_continue") and _time.time() - entry.get("ts", 0) <= 600:
+            return None
+        return out("主人，我在。您直接說要我處理的事，我會先接住。", {"type": "play_voice_bank", "category": "ack_butler"}, clear=True)
+    if lower in noise_set or stripped in noise_set or compact in {"ok隨便", "okay隨便", "隨便ok", "阿福好喂"} or stripped in {"好喂", "好嗯", "好喔", "好哦"} or any(k in lower for k in ["你聽得到嗎", "聽得到嗎", "還在嗎", "你在不在", "告訴我你在不在"]):
+        return out("主人，我在。您直接說要我處理的事，我會先接住。", {"type": "play_voice_bank", "category": "ack_butler"}, clear=True)
+
+    if any(k in compact for k in ["現在幾點", "幾點了", "現在時間", "現在幾點了"]):
+        return out(f"主人，現在是{datetime.now().strftime('%Y年%m月%d日 %H:%M')}。", {"type": "time_status"}, clear=True)
+
+    identity_terms = ["你不是管家嗎", "你是管家", "阿福是管家", "不是秘書", "不要當秘書", "跳針", "你到底會不會", "到底能不能用", "為什麼壞掉", "是不是壞了", "是不是又壞了", "又壞了", "你現在正常嗎", "還正常嗎", "你到底是管家", "管家還是什麼", "到底是管家", "你到底是什麼"]
+    if any(k in compact for k in identity_terms):
+        return out("主人，我是管家，不是秘書。現在我會先判斷您要的是位置、行程、吃飯、健康、找檔案或安全提醒，再走對的工具，不讓上一個任務污染這一句。", {"type": "play_voice_bank", "category": "ack_butler"}, clear=True)
+
+    if any(k in compact for k in ["不方便講話", "用文字", "不要講話", "先文字", "line回", "文字回", "不要出聲", "別出聲", "安靜"]):
+        return out("好的主人，我先安靜，用文字回。您可以直接把需求打給我，我會用清單或連結回覆。", clear=True)
+
+    if any(k in compact for k in ["講慢一點", "說慢一點", "慢一點"]):
+        return out("好的主人，我會放慢速度，用短句回您。", {"type": "voice_style", "speed": "slow"}, clear=True)
+
+    if compact in {"幫我提醒", "提醒我", "幫我提醒一下"} or stripped in {"幫我提醒", "提醒我"}:
+        return out("主人，請告訴我要提醒什麼事，以及什麼時間。", {"type": "need_reminder_detail"}, clear=True)
+
+    if any(k in compact for k in ["付款", "轉帳", "匯款", "買股票", "下單", "刪除帳號", "公開所有合約", "公開合約", "刪掉所有", "把資料刪掉", "資料刪掉", "刪掉資料"]):
+        return out("主人，這類動作會動到金錢、帳號或外部公開，我不能直接執行。我可以先幫您整理資訊與風險，最後一步必須由您親自確認。", {"type": "approval_required", "risk": "critical"}, clear=True)
+
+    health_terms = ["急救", "跌倒", "摔倒", "頭暈", "頭很暈", "頭有點暈", "暈眩", "胸痛", "喘不過氣", "不能呼吸", "不舒服", "血氧", "心跳", "心率", "血壓", "吃藥", "忘記吃藥", "藥"]
+    if any(k in compact for k in health_terms):
+        clear_pending()
+        if any(k in compact for k in ["胸痛", "喘不過氣", "不能呼吸", "跌倒", "摔倒", "急救"]):
+            return out("主人，這可能是急症。請先坐下或躺下、不要硬撐；若有胸痛、呼吸困難、昏厥或跌倒受傷，請立刻叫身邊的人協助並撥打當地緊急電話。我可以同時幫您整理要告訴醫護的症狀。", {"type": "health_emergency"})
+        return out("主人，我先把這句當健康照顧，不拿去找檔案。請告訴我症狀、多久了、現在能不能站穩；如果是血氧或心跳，我會用已授權的健康資料查最近紀錄。", {"type": "health_care"})
+
+    food_terms = ["肚子餓", "吃飯", "吃什麼", "晚餐", "午餐", "早餐", "宵夜", "咖啡", "餐廳", "美食", "日本料理", "拉麵", "壽司", "燒肉", "火鍋", "牛肉麵", "附近吃", "附近有什麼吃", "找吃的", "想喝"]
+    if any(k in compact for k in food_terms):
+        return out("主人，我把這句判斷為吃飯或餐廳，不會拿去翻檔案清單。請讓我讀 GPS 或直接給地點，我先列附近可去的選項。", {"type": "food_intent"}, clear=True)
+
+    calendar_terms = ["幫我排", "排明天", "排今天", "排後天", "取消那個會", "取消會議", "改時間", "幫我看日曆", "看日曆", "我的行程", "有什麼行程", "有會議嗎", "有會嗎", "明天有會", "明天下午", "今天下午", "下午三點"]
+    if any(k in compact for k in ["明天有會", "明天會議", "明天有什麼會", "明天有會嗎"]):
+        clear_pending()
+        tomorrow = (datetime.now().date() + __import__('datetime').timedelta(days=1)).isoformat()
+        try:
+            c = db()
+            rows = c.execute("SELECT title,event_time FROM calendar_events WHERE event_date=? ORDER BY event_time LIMIT 6", (tomorrow,)).fetchall()
+            c.close()
+        except Exception:
+            rows = []
+        if rows:
+            body = "；".join((f"{(t or '')[:5]} {name}".strip()) for name, t in rows)
+            return out(f"主人，明天的行程有：{body}。", {"type": "calendar"})
+        return out(f"主人，明天（{tomorrow}）本機行事曆目前沒有查到會議。若要查 Google 日曆，請確認授權仍有效。", {"type": "calendar"})
+    if any(k in compact for k in calendar_terms):
+        clear_pending()
+        if any(k in compact for k in ["幫我排", "排明天", "排今天", "排後天", "下午三點", "明天下午", "今天下午"]):
+            return out("主人，我把這句判斷為行程安排，不會拿去做旅行或找檔案。請補上事件名稱與地點，我再建立行程；若只要先暫記，我可以先放進待辦。", {"type": "calendar_schedule"})
+        today = datetime.now().date().isoformat()
+        try:
+            c = db()
+            rows = c.execute("SELECT title,event_time FROM calendar_events WHERE event_date=date('now') ORDER BY event_time LIMIT 6").fetchall()
+            c.close()
+        except Exception:
+            rows = []
+        if rows:
+            body = "；".join((f"{(t or '')[:5]} {name}".strip()) for name, t in rows)
+            return out(f"主人，今天的行程有：{body}。", {"type": "play_voice_bank", "category": "calendar"})
+        return out(f"主人，今天（{today}）本機行事曆目前沒有查到行程。若要查 Google 日曆，請確認授權仍有效。", {"type": "play_voice_bank", "category": "calendar"})
+
+    gps_terms = ["gps", "定位", "位置", "我在哪", "附近有什麼", "附近", "我到家了嗎", "我在公司嗎", "我迷路了", "我在火星嗎"]
+    if any(k.lower() in lower for k in gps_terms):
+        clear_pending()
+        if any(k in compact for k in ["合約", "和約", "報價", "爆價", "檔案", "文件"]):
+            return out("主人，我把這句判斷為檔案搜尋，不是定位。請給我公司名、日期或文件類型，我會列前五份。", {"type": "need_file_search_context"}, clear=True)
+        if "附近" in compact:
+            return out("主人，我把這句判斷為附近搜尋，不會拿去排旅行。請允許定位或告訴我目前地點，我會列附近吃飯、咖啡、交通或辦事地點。", {"type": "nearby_intent"})
+        try:
+            loc = get_owner_location()
+        except Exception:
+            loc = "主人，我目前讀不到定位資料。"
+        return out(loc, {"type": "location_status"})
+
+    followup_only = {"不是", "都不是", "不是這些", "不是這幾個", "沒有", "都沒有", "不對", "下一頁", "下一批", "繼續", "要", "不要", "不用", "第2份", "第二份", "第1份", "第一份", "第3份", "第三份"}
+    ordinal_ref = bool(_re.fullmatch(r"第?(\d{1,4}|[一二三四五六七八九十百千]+)[份個]?", compact) or _re.fullmatch(r"第?(\d{1,4}|[一二三四五六七八九十百千]+)[份個]?", stripped))
+    if ordinal_ref:
+        entry = _pending_file_list.get(uid) or {}
+        cands = entry.get("candidates") or []
+        if not cands:
+            return out("主人，我這邊目前沒有正在等待您選的檔案清單。請先說要找什麼檔案。", {"type": "need_file_search_context"}, clear=True)
+        return out("主人，這個編號不在目前這一頁。請說 1 到 5，或說「不是」讓我列下一批。", {"type": "need_file_selection"})
+    reject_markers = ["不是", "都不是", "不是這些", "不是這幾個", "不對", "沒有我要的"]
+    continue_markers = ["好", "要", "繼續", "下一頁", "下一批", "再列", "再找"]
+    if any(r in compact or r in stripped for r in reject_markers):
+        entry = _pending_file_list.get(uid) or {}
+        cands = entry.get("candidates") or []
+        if cands:
+            page = int(entry.get("page", 0) or 0)
+            next_page = page + 1
+            has_more = next_page * _FILE_RESULT_PAGE_SIZE < len(cands)
+            if any(c in compact or c in stripped for c in continue_markers):
+                if has_more:
+                    return _format_file_result_page(uid, next_page)
+                return out("主人，這批搜尋結果已經列完了。請換公司名、日期或檔名片段，我再重新查。", {"type": "need_file_search_context"}, clear=True)
+            entry["awaiting_continue"] = True
+            entry["ts"] = _time.time()
+            _pending_file_list[uid] = entry
+            if has_more:
+                return out("好的主人，這幾份先排除。要我繼續列下一批五份嗎？", None)
+            return out("主人，這批搜尋結果已經列完了。請換公司名、日期或檔名片段，我再重新查。", {"type": "need_file_search_context"}, clear=True)
+        return out("主人，我這邊目前沒有正在等待您選的檔案清單。請先說要找什麼檔案。", {"type": "need_file_search_context"}, clear=True)
+
+    if ("下一頁" in compact or "下一批" in compact or compact in {"繼續", "要"} or stripped in {"繼續", "要"}):
+        entry = _pending_file_list.get(uid) or {}
+        cands = entry.get("candidates") or []
+        if cands:
+            page = int(entry.get("page", 0) or 0)
+            next_page = page + 1
+            if next_page * _FILE_RESULT_PAGE_SIZE < len(cands):
+                return _format_file_result_page(uid, next_page)
+            return out("主人，這批搜尋結果已經列完了。請換公司名、日期或檔名片段，我再重新查。", {"type": "need_file_search_context"}, clear=True)
+    if ((compact in followup_only or stripped in followup_only) or ("下一頁" in compact) or ("下一批" in compact)) and not _pending_file_list.get(uid):
+        return out("主人，我這邊目前沒有正在等待您選的檔案清單。請先說要找什麼，例如合約、報價單、會議紀錄，或給我公司名與日期。", {"type": "need_file_search_context"}, clear=True)
+
+    if any(compact.startswith(k) for k in ["好很長", "不要很長", "不用很長", "算了很長"]):
+        return out("主人，我先停下，不把這段拿去翻舊任務。您重新給我一句明確指令就好。", {"type": "play_voice_bank", "category": "ack_butler"}, clear=True)
+
+    if compact in {"幫我處理一下", "處理一下", "幫我看一下", "看一下"} or stripped in {"幫我處理", "幫我處理一下", "處理一下", "幫我看", "幫我看一下", "看一下"}:
+        return out("可以，主人。請您補一句要處理的是檔案、行程、位置、餐廳，還是其他事情，我會直接走對的工具。", clear=True)
+
+    if any(k in compact for k in ["開會紀錄", "會議紀錄", "會議記錄"]) and not any(k in compact for k in ["日期", "昨天", "今天", "明天", "上週", "公司", "客戶"]):
+        return out("主人，開會紀錄通常很多。請給我日期、公司名、會議主題或參與人其中一個，我會直接列前五份給您。", {"type": "need_file_search_context"}, clear=True)
+
+    if any(k in compact for k in ["A公司上次那個", "Ａ公司上次那個", "A公司那個", "Ａ公司那個"]):
+        return out("主人，A公司這個線索太泛。請給我完整公司名、文件類型或日期其中一個，我會直接列前五份。", {"type": "need_file_search_context"}, clear=True)
+
+    if any(k in compact for k in ["放空", "去哪裡放空", "下週去哪", "去哪裡玩"]):
+        return out("主人，我先不碰檔案。若只是想放空，我會建議選近、少轉乘、住宿舒服的地方。您給我天數和預算，我列三個可走方案。", {"type": "travel_planning"}, clear=True)
+
+    if any(k in compact for k in ["日本五天", "台北一天怎麼玩", "我想出國問行程", "出國問行程"]):
+        return out("可以，主人。我先把這當作旅行規劃，不會拿去找檔案。請告訴我出發月份、人數與預算，我會列一版可執行行程。", {"type": "travel_planning"}, clear=True)
+
+    ambiguous_file_refs = ["這份", "那份", "那個", "這個", "那個啦", "這個啦", "第二個", "第2份", "第一份", "下一頁", "下一批", "念摘要", "唸摘要", "唸給我聽", "念給我聽", "唸一下", "念一下", "讀一下", "這個唸", "這個念", "那份pdf", "那份PDF"]
+    if any(k in compact for k in ambiguous_file_refs):
+        if not _pending_file_list.get(uid):
+            return out("主人，我現在沒有可靠的檔案清單可以接續。請先說要找什麼檔案，或給我公司名、日期、檔名片段，我會重新列前五份。", {"type": "need_file_search_context"}, clear=True)
+        return out("主人，請直接說目前清單上的 1 到 5，或說「不是」讓我列下一批。", {"type": "need_file_selection"})
+
+    return None
 
 def _maybe_handle_ambient_command_fastpath(message: str, current_user=None):
     msg = message or ""
@@ -3286,18 +3744,70 @@ def _maybe_handle_quick_lists_fastpath(message: str, current_user=None):
             c.close()
             return {"text": f"主人，好的，我會在 {trigger.strftime('%Y-%m-%d %H:%M')} 提醒您「{title}」。", "card": None, "action": None}
 
-        # Calendar query fastpath: avoid travel intent hijacking generic 行程.
-        if any(k in msg for k in ["今天有什麼行程", "今日行程", "今天行程", "明天早上有會議", "明天有會議", "今天有會議"]):
-            target = (_dt_quick.now() + (_td_quick(days=1) if "明天" in msg else _td_quick(days=0))).date().isoformat()
-            c = db()
-            rows = c.execute("SELECT title,event_time,notes FROM calendar_events WHERE event_date=? ORDER BY event_time LIMIT 6", (target,)).fetchall()
-            c.close()
-            day_label = "明天" if "明天" in msg else "今天"
+        # Calendar query fastpath: calendar questions must use the live Google Calendar
+        # bridge when it is connected, not only the local fallback table.
+        calendar_query_terms = [
+            "今天有什麼行程", "今日行程", "今天行程", "今天有行程",
+            "明天有什麼行程", "明日行程", "明天行程", "明天有行程",
+            "這週有什麼行程", "本週有什麼行程", "這禮拜有什麼行程",
+            "明天早上有會議", "明天有會議", "今天有會議", "這週有會議",
+        ]
+        if any(k in msg for k in calendar_query_terms):
+            today_quick = _dt_quick.now().date()
+            if any(k in msg for k in ["這週", "本週", "這禮拜", "這星期"]):
+                days = 7
+                start_date = today_quick.isoformat()
+                end_date = (today_quick + _td_quick(days=6)).isoformat()
+                day_label = "這週"
+            else:
+                offset = 1 if "明天" in msg or "明日" in msg else 0
+                days = offset + 1
+                start_date = (today_quick + _td_quick(days=offset)).isoformat()
+                end_date = start_date
+                day_label = "明天" if offset else "今天"
             meeting_label = "會議" if "會議" in msg else "行程"
+
+            c = db()
+            local_rows = c.execute(
+                """SELECT title,event_date,event_time,notes FROM calendar_events
+                   WHERE event_date BETWEEN ? AND ?
+                   ORDER BY event_date,event_time LIMIT 12""",
+                (start_date, end_date),
+            ).fetchall()
+            c.close()
+
+            gcal_rows = []
+            gcal_connected = bool(gcal_service and gcal_service.is_connected(db))
+            if gcal_connected:
+                try:
+                    for e in gcal_service.get_upcoming_events(db, days=days) or []:
+                        start = str(e.get("start") or "")
+                        event_date = start[:10]
+                        if start_date <= event_date <= end_date:
+                            gcal_rows.append((e.get("title") or "未命名行程", event_date, start[11:16], e.get("notes") or ""))
+                except Exception as exc:
+                    print("[calendar_fastpath] gcal query failed", exc)
+
+            seen = set()
+            rows = []
+            for title, event_date, event_time, notes in list(local_rows) + gcal_rows:
+                key = (str(title), str(event_date), str(event_time or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append((title, event_date, event_time or "", notes or ""))
+
+            label_range = start_date if start_date == end_date else start_date + " 到 " + end_date
             if not rows:
-                return {"text": f"主人，{day_label}（{target}）目前沒有本機{meeting_label}記錄。若要我查 Google 日曆，請先確認 Google 授權連線。", "card": None, "action": None}
-            lines = [f"{(r[1] or '')[:5]} {r[0]}".strip() for r in rows]
-            return {"text": f"主人，{day_label}（{target}）的{meeting_label}有：" + "；".join(lines) + "。", "card": None, "action": None}
+                if gcal_connected:
+                    return {"text": f"主人，{day_label}（{label_range}）目前沒有查到{meeting_label}。", "card": None, "action": None}
+                return {"text": f"主人，{day_label}（{label_range}）目前沒有本機{meeting_label}記錄；Google 日曆也還沒有連上。", "card": None, "action": None}
+
+            lines = []
+            for title, event_date, event_time, _notes in rows[:8]:
+                prefix = f"{event_date} " if start_date != end_date else ""
+                lines.append(f"{prefix}{(event_time or '')[:5]} {title}".strip())
+            return {"text": f"主人，{day_label}的{meeting_label}有：" + "；".join(lines) + "。", "card": None, "action": {"type": "play_voice_bank", "category": "calendar"}}
 
         c = db()
         today = datetime.now().date().isoformat()
@@ -3336,6 +3846,47 @@ def _current_file_page_candidates(entry: dict) -> list:
     return list(entry.get("candidates", []))[start:start + _FILE_RESULT_PAGE_SIZE]
 
 
+
+def _public_file_url(raw: str) -> str:
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw
+    if raw.startswith("/alfred/api/"):
+        return raw
+    if raw.startswith("/api/"):
+        return "/alfred" + raw
+    if raw.startswith("/"):
+        return "/alfred/api" + raw
+    return raw
+
+
+
+def _short_file_hint(raw: str, limit: int = 96) -> str:
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    hint = raw
+    for prefix in ("gdrive://shared-drives/", "gdrive://api-search/", "file://"):
+        if hint.startswith(prefix):
+            hint = hint[len(prefix):]
+            break
+    hint = hint.replace("/", " › ")
+    if len(hint) > limit:
+        return "..." + hint[-limit:]
+    return hint
+
+
+def _file_result_card(title: str, rows: list[str], first_url: str = "") -> dict:
+    return {
+        "title": title,
+        "content": "\n\n".join([r for r in rows if r]),
+        "type": "file",
+        "url": first_url or None,
+        "buttonTitle": "開啟第一份" if first_url else None,
+    }
+
 def _format_file_result_page(uid: str, page: int | None = None) -> dict:
     """Render one deterministic page of file candidates and persist page state."""
     entry = _pending_file_list.get(uid) or {}
@@ -3373,12 +3924,14 @@ def _format_file_result_page(uid: str, page: int | None = None) -> dict:
         lines.append(f"{i}. {item.get('name','未命名')}（{item.get('source','來源')}）")
         card_line = f"**{item.get('name','未命名')}**\n來源：{meta}"
         summary = (item.get("summary") or "").strip()
-        if summary:
-            card_line += f"\n{summary[:160]}"
-        if item.get("download_url"):
-            card_line += f"\n下載：/alfred/api{item.get('download_url')}"
+        noisy_summary = summary.startswith("共用雲端硬碟") or summary.startswith("Drive API")
+        if summary and not noisy_summary:
+            card_line += f"\n{summary[:120]}"
+        url = _public_file_url(item.get("download_url") or "")
+        if url:
+            card_line += f"\n下載：{url}"
         elif item.get("path"):
-            card_line += f"\n座標：{item.get('path')}"
+            card_line += f"\n位置：{_short_file_hint(item.get('path'))}"
         card_rows.append(card_line)
 
     prefix = "主人，我已經同時查過" + source_line + "，先列前五份：" if page == 0 else f"主人，這是下一批，第 {start + 1} 到第 {end} 份："
@@ -3390,9 +3943,10 @@ def _format_file_result_page(uid: str, page: int | None = None) -> dict:
     else:
         text += "這已經是最後一批。"
 
+    first_url = _public_file_url((batch[0] or {}).get("download_url") or "")
     return {
         "text": text,
-        "card": None,
+        "card": _file_result_card(entry.get("title") or "檔案搜尋結果", card_rows, first_url),
         "action": {"type": "zero_ui_search_results", "count": str(len(lines))},
     }
 
@@ -3415,6 +3969,9 @@ def _maybe_handle_file_pagination(message: str, current_user=None) -> dict | Non
     reject_words = ["不是", "都不是", "不對", "沒有", "沒有我要的", "不是這些", "不是這幾個", "不在裡面", "不在這裡"]
     continue_words = ["要", "好", "繼續", "下一批", "下一頁", "再列", "再找", "再給我", "繼續找", "繼續列", "下一個"]
     stop_words = ["不要", "不用", "算了", "停止", "先不用"]
+    allowed_phrases = set(reject_words + continue_words + stop_words + ["第1份", "第一份", "第2份", "第二份", "第3份", "第三份", "第4份", "第四份", "第5份", "第五份"])
+    if not any(compact == w or compact.startswith(w) or compact.endswith(w) for w in allowed_phrases):
+        return None
 
     page = int(entry.get("page", 0) or 0)
     next_page = page + 1
@@ -3424,8 +3981,8 @@ def _maybe_handle_file_pagination(message: str, current_user=None) -> dict | Non
         _pending_file_list.pop(uid, None)
         return {"text": "好的主人，我先停在這裡。需要時再給我新的線索，我重新查。", "card": None, "action": None}
 
-    wants_continue = any(w == compact or w in compact for w in continue_words)
-    rejects_current = any(w == compact or w in compact for w in reject_words)
+    wants_continue = any(w == compact or compact.startswith(w) or compact.endswith(w) for w in continue_words)
+    rejects_current = any(w == compact or compact.startswith(w) or compact.endswith(w) for w in reject_words)
 
     # 語音常見：「不是這些，繼續」「都不是，下一批」— 不再多問，直接列下一批。
     if rejects_current and wants_continue:
@@ -3772,6 +4329,9 @@ def _deliver_zero_ui_report(title: str, body: str, current_user=None) -> dict:
 def _maybe_handle_travel_fastpath(message, current_user=None):
     msg = message or ""
     if not msg:
+        return None
+    meal_terms = ["肚子餓", "餓了", "附近吃", "吃什麼", "餐廳", "午餐", "晚餐", "早餐", "宵夜", "找吃的"]
+    if any(k in msg for k in meal_terms):
         return None
     fileish_terms = ["合約", "文件", "檔案", "PDF", "pdf", "報告", "提案", "企劃", "資料"]
     explicit_travel_hint = any(k in msg for k in ["旅遊", "旅行", "出國", "行程", "去玩", "排行程", "自由行", "親子遊"])
@@ -4493,8 +5053,90 @@ def _maybe_handle_restaurant_fastpath(message, current_user=None):
     return {"text": "\n".join(_lines), "card": None, "action": None}
 
 
+
+
+def _alice_file_map_owner_uid(current_user=None) -> str:
+    """Map Alfred owner identity to Alice/OpenClaw file-map owner identity."""
+    default_owner = os.getenv("ALICE_FILE_MAP_OWNER_UID", "norika.chen@dalue.co")
+    raw_map = os.getenv("ALICE_FILE_MAP_OWNER_MAP", "")
+    owner_map = {
+        "norika1207@gmail.com": "norika.chen@dalue.co",
+    }
+    if raw_map:
+        try:
+            owner_map.update(json.loads(raw_map))
+        except Exception as exc:
+            print(f"[alice-file-map] bad ALICE_FILE_MAP_OWNER_MAP: {exc}")
+    email = ""
+    if current_user:
+        try:
+            c = auth_db()
+            row = c.execute("SELECT email FROM users WHERE id=? LIMIT 1", (current_user,)).fetchone()
+            c.close()
+            if row and row[0]:
+                email = str(row[0]).strip().lower()
+        except Exception:
+            email = ""
+    if email and email in owner_map:
+        return owner_map[email]
+    if email and os.getenv("ALICE_FILE_MAP_USE_EMAIL_OWNER", "1").lower() not in {"0", "false", "no"}:
+        return email
+    return default_owner
+
+def _alice_file_map_bridge_search(query: str, current_user=None, limit: int = 12) -> list[dict]:
+    """Query Alice/OpenClaw file-map bridge before falling back to local fuzzy search."""
+    url = os.getenv("ALICE_FILE_MAP_URL", "http://100.121.29.3:18793/smart-search")
+    owner_uid = _alice_file_map_owner_uid(current_user)
+    if not url or not query:
+        return []
+    try:
+        with httpx.Client(timeout=6.0) as client:
+            resp = client.post(url, json={
+                "query": query,
+                "channel": "voice",
+                "owner_uid": owner_uid,
+                "limit": max(1, min(int(limit or 12), 20)),
+                "query_limit": 6,
+                "no_llm_rewrite": True,
+            })
+            resp.raise_for_status()
+            payload = resp.json()
+    except Exception as exc:
+        print(f"[alice-file-map] bridge failed: {exc}")
+        return []
+
+    rows = payload.get("results") or []
+    mapped = []
+    for row in rows:
+        name = row.get("name") or row.get("file_name") or row.get("title") or ""
+        if not name:
+            continue
+        source = row.get("source") or ""
+        source_label = "Google Drive"
+        if source == "line_group":
+            source_label = "LINE群組"
+        elif source in {"local_desktop", "mac", "shared_drive_local_scan"}:
+            source_label = "Mac 本機" if source in {"local_desktop", "mac"} else "Google Drive"
+        mapped.append({
+            "source": source_label,
+            "name": name,
+            "summary": row.get("summary") or "",
+            "ts": row.get("modified") or row.get("updated_at") or "",
+            "drive": row.get("group_name") or row.get("vault_id") or "Alice file map",
+            "mime": row.get("mime_type") or row.get("mime") or "",
+            "path": row.get("local_path") or row.get("server_path") or "",
+            "id": row.get("source_id") or row.get("file_key") or "",
+            "download_url": row.get("download_url") or "",
+            "server_path": row.get("server_path") or "",
+            "vault_key": row.get("file_key") or "",
+            "score": float(row.get("score") or 0),
+            "is_folder": (row.get("mime_type") or "") == "application/vnd.google-apps.folder",
+        })
+    return mapped
+
 def _maybe_handle_file_search_fastpath(message: str, current_user=None, scene=None):
-    msg = message or ""
+    msg = (message or "").replace("和約", "合約").replace("爆價", "報價")
+    msg = msg.replace("阿福", "").replace("alfred", "").replace("afu", "").strip()
     scene = scene or _get_current_scene(current_user)
     if scene.get("type") == "travel_abroad" and any(k in msg for k in ["翻譯", "店員", "餐廳", "景點", "交通", "天氣", "旅遊", "行程"]):
         return None
@@ -4520,7 +5162,20 @@ def _maybe_handle_file_search_fastpath(message: str, current_user=None, scene=No
             words = [canon] + list(syns)
             if low in [w.lower() for w in words]:
                 expanded_tokens.extend(words)
-    expanded_tokens = list(dict.fromkeys([t for t in expanded_tokens if t]))[:12]
+    expanded_tokens = list(dict.fromkeys([t for t in expanded_tokens if t]))[:8]
+    _search_started = _time.time()
+
+    def _file_budget_exhausted(limit=3.2):
+        return (_time.time() - _search_started) > limit
+
+    def _budgeted(block):
+        if _file_budget_exhausted():
+            return False
+        try:
+            block()
+        except Exception as exc:
+            print(f"[file-fastpath] {block.__name__} failed: {exc}")
+        return True
 
     def add(source, name, summary="", ts="", drive="", mime="", path="", file_id=""):
         if not name:
@@ -4584,7 +5239,20 @@ def _maybe_handle_file_search_fastpath(message: str, current_user=None, scene=No
             "id": file_id or "", "score": sc, "is_folder": is_folder
         })
 
-    try:
+    def _search_alice_bridge():
+        for ar in _alice_file_map_bridge_search(msg, current_user, limit=30):
+            before = len(candidates)
+            add(ar.get("source", "Google Drive"), ar.get("name", ""), ar.get("summary", ""),
+                ar.get("ts", ""), ar.get("drive", ""), ar.get("mime", ""),
+                ar.get("path", ""), ar.get("id", ""))
+            if len(candidates) > before:
+                candidates[-1]["download_url"] = ar.get("download_url", "")
+                candidates[-1]["server_path"] = ar.get("server_path", "")
+                candidates[-1]["vault_key"] = ar.get("vault_key", "")
+                candidates[-1]["score"] += ar.get("score", 0) + 400
+    _budgeted(_search_alice_bridge)
+
+    def _search_vault():
         _vault_owner = _vault_owner_uid(current_user)
         for vr in _vault_search(_vault_owner, msg, fallback=0, limit=50):
             src = vr.get("source") or "檔案Vault"
@@ -4597,25 +5265,29 @@ def _maybe_handle_file_search_fastpath(message: str, current_user=None, scene=No
                 candidates[-1]["server_path"] = vr.get("server_path", "")
                 candidates[-1]["vault_key"] = vr.get("file_key", "")
                 candidates[-1]["score"] += vr.get("score", 0)
-    except Exception as exc:
-        print(f"[vault] search fastpath failed: {exc}")
+    _budgeted(_search_vault)
 
-    try:
+    def _search_uploads():
         c = db()
-        for kw in expanded_tokens:
-            like = f"%{kw}%"
-            for r in c.execute(
-                "SELECT id, original_name, description, tags, ts, mime_type FROM files "
-                "WHERE original_name LIKE ? OR description LIKE ? OR tags LIKE ? ORDER BY ts DESC LIMIT 20",
-                (like, like, like),
-            ).fetchall():
-                add("阿福保管", r[1], r[2] or r[3] or "", r[4] or "", "", r[5] or "", file_id=r[0])
-        c.close()
-    except Exception:
-        pass
+        try:
+            for kw in expanded_tokens:
+                if _file_budget_exhausted():
+                    break
+                like = f"%{kw}%"
+                for r in c.execute(
+                    "SELECT id, original_name, description, tags, ts, mime_type FROM files "
+                    "WHERE original_name LIKE ? OR description LIKE ? OR tags LIKE ? ORDER BY ts DESC LIMIT 20",
+                    (like, like, like),
+                ).fetchall():
+                    add("阿福保管", r[1], r[2] or r[3] or "", r[4] or "", "", r[5] or "", file_id=r[0])
+        finally:
+            c.close()
+    _budgeted(_search_uploads)
 
-    try:
+    def _search_drive():
         for kw in expanded_tokens:
+            if _file_budget_exhausted():
+                break
             like = f"%{kw}%"
             for r in _query_user_then_shared(
                 current_user,
@@ -4624,6 +5296,8 @@ def _maybe_handle_file_search_fastpath(message: str, current_user=None, scene=No
                 (like, like, like),
             ):
                 add("Google Drive", r[1], "", r[3] or "", r[4] or "", r[2] or "", file_id=r[0])
+            if _file_budget_exhausted():
+                break
             for r in _query_user_then_shared(
                 current_user,
                 "SELECT DISTINCT fk.file_id, fk.file_name, di.mime_type, di.modified, fk.drive_name "
@@ -4632,11 +5306,12 @@ def _maybe_handle_file_search_fastpath(message: str, current_user=None, scene=No
                 (kw, like),
             ):
                 add("Google Drive", r[1], "", r[3] or "", r[4] or "", r[2] or "", file_id=r[0])
-    except Exception:
-        pass
+    _budgeted(_search_drive)
 
-    try:
+    def _search_mac():
         for kw in expanded_tokens:
+            if _file_budget_exhausted():
+                break
             like = f"%{kw}%"
             rows = _query_mac_index(
                 current_user,
@@ -4646,6 +5321,8 @@ def _maybe_handle_file_search_fastpath(message: str, current_user=None, scene=No
             )
             for r in rows:
                 add("Mac 本機", r[0], r[1] or "", r[2] or "", "", "", r[3] or "")
+            if _file_budget_exhausted():
+                break
             content_rows = _query_mac_index(
                 current_user,
                 "SELECT name, substr(content,1,180), indexed_at, path FROM mac_files_content "
@@ -4654,8 +5331,7 @@ def _maybe_handle_file_search_fastpath(message: str, current_user=None, scene=No
             )
             for r in content_rows:
                 add("Mac 本機", r[0], r[1] or "", r[2] or "", "", "", r[3] or "")
-    except Exception:
-        pass
+    _budgeted(_search_mac)
 
     if not candidates:
         if _explicit_file_search_intent(msg):
@@ -4669,14 +5345,29 @@ def _maybe_handle_file_search_fastpath(message: str, current_user=None, scene=No
     ranked = sorted(candidates, key=lambda x: (x.get("is_folder", False), -x["score"]))
     selected = []
     selected_keys = set()
+    selected_names = set()
+    deferred_same_name = []
     for item in ranked:
         key = (item["source"], item["name"].lower(), item.get("id") or item.get("path") or "")
         if key in selected_keys:
             continue
+        name_key = item["name"].lower()
+        if name_key in selected_names:
+            deferred_same_name.append((key, item))
+            continue
         selected.append(item)
         selected_keys.add(key)
+        selected_names.add(name_key)
         if len(selected) >= 50:
             break
+    if len(selected) < 50:
+        for key, item in deferred_same_name:
+            if key in selected_keys:
+                continue
+            selected.append(item)
+            selected_keys.add(key)
+            if len(selected) >= 50:
+                break
     import re as _re_file_strict
     strict_terms = [
         t for t in _re_file_strict.findall(r"[A-Za-z0-9][A-Za-z0-9_-]{2,}", msg)
@@ -4717,9 +5408,16 @@ def _maybe_handle_file_search_fastpath(message: str, current_user=None, scene=No
             src = top[0]["source"]
             drv = top[0].get("drive", "")
             loc = f"{src}／{drv}" if drv else src
+            first_url = _public_file_url(top[0].get("download_url") or "")
+            row = f"**{top[0]['name']}**\n來源：{loc}"
+            if first_url:
+                row += f"\n下載：{first_url}"
+            elif top[0].get("path"):
+                row += f"\n位置：{_short_file_hint(top[0].get('path'))}"
             return {
                 "text": f"主人，找到了：「{top[0]['name']}」（{loc}）。",
-                "card": None, "action": None
+                "card": _file_result_card(f"找到檔案：{top[0]['name']}", [row], first_url),
+                "action": None
             }
 
     searched_sources = ["Google Drive/共用雲端"]
@@ -4744,10 +5442,28 @@ def _maybe_handle_file_search_fastpath(message: str, current_user=None, scene=No
     }
     return _format_file_result_page(_uid_key, 0)
 
+def _looks_garbled_text(text: str) -> bool:
+    sample = (text or "")[:4000]
+    if not sample:
+        return False
+    if "\x00" in sample or "�" in sample:
+        return True
+    compact = "".join(ch for ch in sample if not ch.isspace())
+    if len(compact) < 40:
+        return False
+    control = sum(1 for ch in compact if ord(ch) < 32 or 0x7F <= ord(ch) <= 0x9F)
+    readable = sum(
+        1 for ch in compact
+        if ch.isalnum() or '\u4e00' <= ch <= '\u9fff' or ch in "，。；：、！？（）()[]【】%％/.·,:;!?$＄元年月日-"
+    )
+    # Old binary .doc / protected extracts often become mostly control or random symbols.
+    return (control / max(1, len(compact)) > 0.015) or (readable / max(1, len(compact)) < 0.58)
+
+
 def _quick_spoken_document_summary(text: str, name: str = "") -> str:
     import re as _re
     raw = _re.sub(r"\s+", " ", text or "").strip()
-    if not raw:
+    if not raw or _looks_garbled_text(raw):
         return ""
     parts = _re.split(r"(?<=[。；;])|\n+", raw)
     parts = [p.strip(" ：:，,。") for p in parts if 10 <= len(p.strip()) <= 180]
@@ -4830,6 +5546,37 @@ def _analyze_candidate(item: dict, current_user=None) -> dict | None:
     name = item.get("name", "")
     source = item.get("source", "")
 
+    def _metadata_summary(reason: str = "") -> dict:
+        drive = (item.get("drive") or "").strip()
+        ts = str(item.get("ts") or "").strip()[:10]
+        summary_hint = (item.get("summary") or "").strip()
+        path_hint = _short_file_hint(item.get("path") or "", 140)
+        lines = []
+        if drive:
+            lines.append(f"1. 來源：{source}／{drive}。")
+        else:
+            lines.append(f"1. 來源：{source or '索引'}。")
+        if ts:
+            lines.append(f"2. 時間：索引或修改日期是 {ts}。")
+        noisy_summary = (
+            summary_hint.startswith("Drive API")
+            or summary_hint.startswith("共用雲端硬碟")
+            or "gdrive://" in summary_hint
+            or "file://" in summary_hint
+        )
+        next_no = 3
+        if summary_hint and not noisy_summary:
+            lines.append(f"{next_no}. 索引摘要：{summary_hint[:120]}。")
+            next_no += 1
+        if path_hint:
+            lines.append(f"{next_no}. 位置線索：{path_hint}。")
+            next_no += 1
+        lines.append(f"{next_no}. 狀態：目前沒有抽出全文，所以這是依檔案地圖整理的摘要；要做條款審查，需要全文文字或可讀取版本。")
+        why = f"（{reason}）" if reason else ""
+        return {"text": _with_related_hint(f"主人，我找到「{name}」{why}。我先照檔案地圖念可用摘要：\n\n" + "\n".join(lines)),
+                "card": None,
+                "action": {"type": "metadata_summary_fallback"}}
+
     def _with_related_hint(result_text: str) -> str:
         """分析完後主動搜尋相關文件，有的話加一句提示。"""
         uid = current_user or "__anon__"
@@ -4855,14 +5602,14 @@ def _analyze_candidate(item: dict, current_user=None) -> dict | None:
                 (f"%{name}%",))
         if rows and rows[0][0] and len(rows[0][0]) > 50:
             content = rows[0][0][:80000]
+            if _looks_garbled_text(content):
+                return _metadata_summary("全文抽出是亂碼，可能是舊 Word、掃描或受保護格式")
             summary = _quick_spoken_document_summary(content, name)
             if not summary:
                 summary = _clean_spoken_summary(content[:900])
             return {"text": _with_related_hint(f"主人，我找到「{name}」（Mac 本機），讀完了，重點是：\n\n{summary}"),
                     "card": None, "action": None}
-        return {"text": f"主人，找到「{name}」但目前還沒抽取內容，無法念給您聽。",
-                "card": None,
-                "action": None}
+        return _metadata_summary("Mac 本機目前還沒抽取到全文")
 
     elif source == "Google Drive":
         if not drive_service:
@@ -4881,8 +5628,9 @@ def _analyze_candidate(item: dict, current_user=None) -> dict | None:
         except Exception as _e:
             return {"text": f"主人，讀取「{name}」時失敗：{_e}", "card": None, "action": None}
         if not text or len(text.strip()) < 40 or text.startswith("["):
-            return {"text": f"主人，找到「{name}」但無法讀取內容（可能是圖片或受保護格式）。",
-                    "card": None, "action": None}
+            return _metadata_summary("全文讀取失敗，可能是圖片型 PDF 或受保護格式")
+        if _looks_garbled_text(text):
+            return _metadata_summary("全文抽出是亂碼，可能是舊 Word .doc、掃描或受保護格式")
         summary = _quick_spoken_document_summary(text, name)
         if not summary:
             summary = _clean_spoken_summary(text[:900])
@@ -4895,9 +5643,8 @@ def _analyze_candidate(item: dict, current_user=None) -> dict | None:
         if not path or not _os_ac.path.exists(path):
             return {"text": f"主人，找到「{name}」，但目前只能提供下載連結，伺服器端檔案路徑還沒同步好。", "card": None, "action": None}
         text = _extract_text_from_file(path, mime or "", name)
-        if not text or text.startswith("["):
-            link = item.get("download_url") or ""
-            return {"text": f"主人，找到「{name}」（LINE群組）。這份目前無法直接抽文字，您可以先下載查看：{link}", "card": None, "action": None}
+        if not text or text.startswith("[") or _looks_garbled_text(text):
+            return _metadata_summary("LINE 群組檔案目前無法直接抽出可讀文字")
         summary = _quick_spoken_document_summary(text, name) or _clean_spoken_summary(text[:900])
         return {"text": _with_related_hint(f"主人，我讀了「{name}」（LINE群組），重點是：\n\n{summary}"),
                 "card": None, "action": None}
@@ -4920,7 +5667,7 @@ def _analyze_candidate(item: dict, current_user=None) -> dict | None:
         stored, orig_name, mime = row
         text = _extract_text_from_file(f"{FILE_DIR}/{stored}", mime or "", orig_name or name)
         if not text or text.startswith("["):
-            return {"text": f"主人，找到「{name}」但無法讀取內容。", "card": None, "action": None}
+            return _metadata_summary("阿福保管檔案目前無法直接抽文字")
         summary = _quick_spoken_document_summary(text, name)
         if not summary:
             summary = _clean_spoken_summary(text[:900])
@@ -5463,6 +6210,12 @@ async def chat(req: ChatReq,
     global _current_user_id
     _current_user_id = current_user   # 讓 db() 知道用哪個用戶的 DB
 
+    # Absolute front-door fuse: common/noisy/urgent owner utterances must not wait
+    # for auth DB, scene DB, memory writes, file search, or LLM/tool fanout.
+    _frontdoor_guard = _maybe_handle_chaos_guard_fastpath(req.message, current_user)
+    if _frontdoor_guard is not None:
+        return _frontdoor_guard
+
     # 試用次數計數
     if current_user:
         ac = auth_db()
@@ -5493,11 +6246,21 @@ async def chat(req: ChatReq,
     if _semantic.get("context_policy") == "clear_file_pending":
         _pending_file_list.pop(current_user or "__anon__", None)
 
+    _brain_decision = _afu_brain_decide(_msg_text_early, _semantic)
+    try:
+        print("[AfuBrain]", json.dumps({k: _brain_decision.get(k) for k in ["intent", "risk", "decision", "blocked_final_action"]}, ensure_ascii=False))
+    except Exception:
+        pass
+
     def _fp_return(res):
         """Fastpath 只保存對話紀錄，不觸發記憶提取；常見口令必須先穩定回主人。"""
         if res and isinstance(res, dict) and res.get("text"):
             _save_conv_turn("assistant", res["text"])
         return res
+
+    _brain_stop = _afu_brain_gate_response(_brain_decision)
+    if _brain_stop is not None:
+        return _fp_return(_brain_stop)
 
     # ── liveness / greeting 第一道閘:管家氣質的根本,不該等 LLM ──
     _liveness = _maybe_handle_liveness_fastpath(req.message)
@@ -5574,6 +6337,19 @@ async def chat(req: ChatReq,
     if _doc_sel is not None:
         return _fp_return(_doc_sel)
 
+    _uid_for_contract_prompt = current_user or "__anon__"
+    _msg_for_contract_prompt = req.message or ""
+    if (
+        any(k in _msg_for_contract_prompt for k in ["這份合約", "那份合約", "這個合約", "那個合約"])
+        and any(k in _msg_for_contract_prompt for k in ["分析", "審查", "摘要", "重點", "風險", "條款"])
+        and not _pending_file_list.get(_uid_for_contract_prompt)
+    ):
+        return _fp_return({
+            "text": "主人，可以。我需要先知道是哪一份合約；如果是剛剛清單裡的，直接說第幾份，或給我公司名、日期、檔名片段。",
+            "card": None,
+            "action": {"type": "need_file_selection", "intent": "contract_review"}
+        })
+
     # 旅遊行程快路徑 (2026-05-12)：城市+旅遊關鍵字 → 直接 SQL，不過 LLM
     # 必須先於 shopping，否則「找台北米其林餐廳」會被 shopping 誤抓
     _travel_res = _maybe_handle_travel_fastpath(req.message, current_user)
@@ -5649,6 +6425,12 @@ async def chat(req: ChatReq,
     scene_injection = _scene_prompt(_scene)
     system = f"""你是阿福。
 {scene_injection}
+
+【身份最高規則】
+你是管家，不是秘書。秘書、文件、會議、行事曆、檔案搜尋、OCR、摘要都只是你可調度的助手與工具房。
+你的優先順序永遠是：主人當下狀態與安全感 > 聽得見並穩定回應 > 判斷是否需要工具 > 才是文件/會議/摘要。
+除非主人明確要求文件、會議、行程、郵件或摘要，不要主動把一般對話導向秘書工作。
+回覆要像老練管家：短、穩、先接住主人，再做事。
 
 【誠實鐵律 — 絕對不准違反】
 1. 工具回空陣列 / 找不到 → 直接說「主人，這部分我目前查不到」，不准編造檔名、不准說「已連線」。
@@ -8034,7 +8816,7 @@ async def chat(req: ChatReq,
                                 ) or "（無共同行事曆）"
 
                                 prompt = (
-                                    f"你是主管的秘書，請用繁體中文為主管準備與下屬「{s_name}」（{role or '職稱未知'}）的 1-on-1 會議簡報。\n\n"
+                                    f"你是阿福的辦公室助手模組，正在替阿福準備給主人的 1-on-1 管家簡報；不要自稱秘書。請用繁體中文整理與下屬「{s_name}」（{role or '職稱未知'}）的重點。\n\n"
                                     f"上次 1-on-1：{last_1on1 or '未記錄'}\n\n"
                                     f"近期筆記（個人/工作/關注點）：\n{notes_block}\n\n"
                                     f"主管對 {s_name} 的未兌現承諾：\n{commits_block}\n\n"
@@ -9283,7 +10065,8 @@ async def _auto_extract_memory(user_msg: str, assistant_reply: str, user_id=None
 
         combined = "\n".join(_ctx_lines) if _ctx_lines else f"主人說：{user_msg[:300]}\n阿福說：{assistant_reply[:400]}"
 
-        prompt = f"""你是一位細心的管家助理，負責從對話中觀察並記錄主人的所有細節。
+        prompt = f"""你是阿福的記憶助手模組，只負責替管家記錄線索；阿福本人是管家，不是秘書。
+請從對話中觀察並記錄主人的長期偏好、關係、習慣與待關照事項。
 
 以下是最近幾輪對話：
 {combined}
@@ -12268,7 +13051,15 @@ def admin_file_taxonomy(user_id: str = Depends(require_admin)):
 
 # ─── File Vault: per-user hard-drive map and fuse layer ───────────────────────
 
+_file_vault_schema_ready: set[str] = set()
+
 def _ensure_file_vault_tables(conn):
+    try:
+        _db_path = (conn.execute("PRAGMA database_list").fetchone() or [None, None, ""])[2] or "__memory__"
+        if _db_path in _file_vault_schema_ready:
+            return
+    except Exception:
+        _db_path = "__unknown__"
     conn.execute("""CREATE TABLE IF NOT EXISTS file_vaults
         (vault_id TEXT PRIMARY KEY, owner_uid TEXT, source TEXT, name TEXT,
          created_at TEXT, updated_at TEXT)""")
@@ -12298,6 +13089,10 @@ def _ensure_file_vault_tables(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vault_files_group ON vault_files(group_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_vault_kw_keyword ON vault_file_keywords(keyword)")
     conn.commit()
+    try:
+        _file_vault_schema_ready.add(_db_path)
+    except Exception:
+        pass
 
 
 def _vault_file_key(owner_uid: str, source: str, source_id: str = "", local_path: str = "", name: str = "") -> str:
@@ -14369,25 +15164,49 @@ async def mac_index(request: Request, user_id: str = Depends(require_user)):
     files = [f for f in raw_files if not _mac_file_is_garbage(f)]
     _skipped = len(raw_files) - len(files)
     import sqlite3 as _sq
-    uc = _sq.connect(user_db_path(user_id))
+    uc = _sq.connect(user_db_path(user_id), timeout=3.0)
+    try:
+        uc.execute("PRAGMA busy_timeout=3000")
+    except Exception:
+        pass
     _ensure_mac_tables(uc)
     now = datetime.now().isoformat()
+    vault_deferred = 0
+    try:
+        for f in files:
+            uc.execute(
+                """INSERT OR REPLACE INTO mac_files_index (path,name,size,modified,kind,indexed_at)
+                   VALUES (?,?,?,?,?,?)""",
+                (f.get("path",""), f.get("name",""), f.get("size",0),
+                 f.get("modified",""), f.get("kind",""), now)
+            )
+        uc.commit()
+        total = uc.execute("SELECT COUNT(*) FROM mac_files_index").fetchone()[0]
+    except _sq.OperationalError as exc:
+        uc.rollback()
+        uc.close()
+        if "locked" in str(exc).lower():
+            return {"ok": False, "queued": True, "reason": "db_locked", "indexed": 0, "skipped": _skipped, "total": 0}
+        raise
+    finally:
+        try:
+            uc.close()
+        except Exception:
+            pass
+
     for f in files:
-        uc.execute(
-            """INSERT OR REPLACE INTO mac_files_index (path,name,size,modified,kind,indexed_at)
-               VALUES (?,?,?,?,?,?)""",
-            (f.get("path",""), f.get("name",""), f.get("size",0),
-             f.get("modified",""), f.get("kind",""), now)
-        )
-        _vault_upsert_file(
-            user_id, "mac", f.get("name",""), source_id=f.get("path",""),
-            mime_type=f.get("kind",""), size=f.get("size",0), modified=f.get("modified",""),
-            local_path=f.get("path",""), indexed_state="mapped"
-        )
-    uc.commit()
-    total = uc.execute("SELECT COUNT(*) FROM mac_files_index").fetchone()[0]
-    uc.close()
-    return {"ok": True, "indexed": len(files), "skipped": _skipped, "total": total}
+        try:
+            _vault_upsert_file(
+                user_id, "mac", f.get("name",""), source_id=f.get("path",""),
+                mime_type=f.get("kind",""), size=f.get("size",0), modified=f.get("modified",""),
+                local_path=f.get("path",""), indexed_state="mapped"
+            )
+        except _sq.OperationalError as exc:
+            if "locked" in str(exc).lower():
+                vault_deferred += 1
+                continue
+            raise
+    return {"ok": True, "indexed": len(files), "skipped": _skipped, "total": total, "vault_deferred": vault_deferred}
 
 
 @app.post("/api/mac/content")

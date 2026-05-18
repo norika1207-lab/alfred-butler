@@ -91,9 +91,12 @@ final class AmbientRecorder: NSObject, ObservableObject {
         #if !os(macOS)
         let s = AVAudioSession.sharedInstance()
         do {
-            try s.setCategory(.record, mode: .measurement,
-                              options: [.allowBluetooth, .mixWithOthers])
+            // 阿福模式必須同時允許錄音、短提示音與鎖屏背景錄音。
+            // 不再用 .record/.measurement，避免 VoiceBank/TTS 一播放就切換 session，造成麥克風指示亂跳或錄音中斷。
+            try s.setCategory(.playAndRecord, mode: .voiceChat,
+                              options: [.defaultToSpeaker, .allowBluetoothHFP, .mixWithOthers])
             try s.setActive(true)
+            try s.overrideOutputAudioPort(.speaker)
         } catch {
             NSLog("[Ambient] session error \(error.localizedDescription)")
         }

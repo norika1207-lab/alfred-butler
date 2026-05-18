@@ -133,8 +133,8 @@ final class VoiceBankPlayer {
     private func play(url: URL) async -> Bool {
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default,
-                                    options: [.defaultToSpeaker, .allowBluetoothHFP])
+            try session.setCategory(.playAndRecord, mode: .voiceChat,
+                                    options: [.defaultToSpeaker, .allowBluetoothHFP, .mixWithOthers])
             try session.setActive(true)
             try session.overrideOutputAudioPort(.speaker)
 

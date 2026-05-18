@@ -3,7 +3,7 @@
 
 <!-- BEGIN AUTO_STATUS -->
 
-## ⭐ 開發進度表(自動生成 — last: 2026-05-18 13:07)
+## ⭐ 開發進度表(自動生成 — last: 2026-05-18 17:03)
 
 > **這份是必讀。Alfred 整個進度都在這。**
 > 由 `scripts/generate_status.py` 掃 codebase 自動生成,**不要手動改這段(`<!-- BEGIN/END AUTO_STATUS -->` 之間)**。
@@ -23,7 +23,7 @@
 | Scrapers in tree | 11 |
 | iOS Swift 檔 | 26 個,共 5,456 行 |
 | voice_bank 預錄 mp3 | 3,061 個 |
-| `alfred.db` 大小 | 439 MB |
+| `alfred.db` 大小 | 454 MB |
 | 主人上傳分析過的檔案 | 41 |
 
 ### Fastpath 函數(zero LLM 秒答)
@@ -163,7 +163,7 @@
 
 | 類別 | 數量 / 內容 |
 |---|---|
-| `*.bak*` 檔案 | 143 個 |
+| `*.bak*` 檔案 | 144 個 |
 | 備份資料夾 | ResourceBackups |
 | 舊快照 | ios_latest.zip, ios_app, ios |
 
@@ -172,6 +172,7 @@
 **最近 20 commits**:
 
 ```
+5755f13 Document Alfred source of truth
 4e796c5 Wire iOS voice bank playback
 9837e1a Use Norika primary owner identity
 24ecf7d Merge devices into owner identity
@@ -191,12 +192,14 @@ cd2556f fix(anniversary_fastpath): 連 shared alfred.db 不要走 per-user db (a
 1fa915a fix(chat): 5/14 早上 6 個答非所問 case root cause 修法
 e92be48 fix(ios audio): TTS 雜音 root cause — 三個 player 統一 AVAudioSession 設定
 1ec91ef feat(identity): owner_identity singleton + LINE/TG gate (Bug 修法 a)
-c9e8154 fix: LINE 對話邏輯 — fastpath chain + 餐飲意圖 + 區名 + history
 ```
 
 **rollback tags**(最近 10):
 
 ```
+post_stress_fixes_20260518
+pre_sqlite_wal_20260518
+pre_stress_fixes_20260518
 post_alfred_always_on_20260515
 post_alfred_explicit_listening_consent_20260515
 post_alfred_mode_ambient_20260515
@@ -204,9 +207,6 @@ post_alfred_mode_local_notice_20260515
 post_alfred_notice_repeat_20260515
 post_ambient_local_vad_20260515
 post_ambient_transcript_tool_20260515
-post_app_store_strategy_docs_20260515
-post_demo_regression_hardening_20260515
-post_full_regression_zero_ui_20260515
 ```
 
 ### 順藤摸瓜 — 我是新接手的人,該怎麼讀?
